@@ -1,0 +1,21 @@
+# Python & Environments
+__pycache__/
+*.py[cod]
+.venv/
+*.env
+
+# Large Data & Models
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/synthetic/*
+!data/synthetic/.gitkeep
+*.pkl
+*.joblib
+
+# IDE & Notebooks
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
