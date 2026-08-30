@@ -1,12 +1,19 @@
+"""
+Evaluate the statistical anomaly detector.
+"""
+
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from skyguard.config.paths import (
     HISTORICAL_PARQUET,
     PRESENT_PARQUET,
     RESULTS_STATISTICAL_DIR,
+    SYNTHETIC_DATA_DIR,
 )
 from skyguard.detectors.statistical import (
     StatisticalConfig,
@@ -14,50 +21,69 @@ from skyguard.detectors.statistical import (
     run_statistical_detector,
     summarize_statistical_alerts,
 )
+from skyguard.simulation.anomaly_injector import (
+    AnomalyConfig,
+    inject_anomalies,
+)
 
 VARIABLES = ["temperature", "humidity", "pressure"]
+RANDOM_SEED = 42
+STATISTICAL_INJECTED_PARQUET = (
+    SYNTHETIC_DATA_DIR / "statistical_evaluation_injected.parquet"
+)
 
 
-def load_datasets():
-    """Load and validate historical and unseen evaluation datasets."""
-    print("Loading datasets...")
+def load_datasets() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load calibration and evaluation datasets."""
+
+    print("\n" + "=" * 70)
+    print("LOADING DATASETS")
+    print("=" * 70)
 
     if not HISTORICAL_PARQUET.exists():
         raise FileNotFoundError(f"Historical dataset not found:\n{HISTORICAL_PARQUET}")
+
     if not PRESENT_PARQUET.exists():
         raise FileNotFoundError(f"Present dataset not found:\n{PRESENT_PARQUET}")
 
     historical_df = pd.read_parquet(HISTORICAL_PARQUET)
     present_df = pd.read_parquet(PRESENT_PARQUET)
 
-    historical_df["timestamp"] = pd.to_datetime(historical_df["timestamp"], utc=True)
-    present_df["timestamp"] = pd.to_datetime(present_df["timestamp"], utc=True)
+    for df in (historical_df, present_df):
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
-    historical_df = historical_df.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
-    present_df = present_df.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
+    historical_df = historical_df.sort_values(["station_id", "timestamp"]).reset_index(
+        drop=True
+    )
+    present_df = present_df.sort_values(["station_id", "timestamp"]).reset_index(
+        drop=True
+    )
 
     print("\nHistorical calibration data:")
     print(f"  Rows:     {len(historical_df):,}")
     print(f"  Stations: {historical_df['station_id'].nunique()}")
-    print(f"  Period:   {historical_df['timestamp'].min()} to {historical_df['timestamp'].max()}")
+    print(
+        f"  Period:   {historical_df['timestamp'].min()} to {historical_df['timestamp'].max()}"
+    )
 
     print("\nUnseen evaluation data:")
     print(f"  Rows:     {len(present_df):,}")
     print(f"  Stations: {present_df['station_id'].nunique()}")
-    print(f"  Period:   {present_df['timestamp'].min()} to {present_df['timestamp'].max()}")
+    print(
+        f"  Period:   {present_df['timestamp'].min()} to {present_df['timestamp'].max()}"
+    )
 
     return historical_df, present_df
 
 
-def train_detector(historical_df, config=None):
-    """Calibrate the statistical detector on historical data."""
+def calibrate_detector(historical_df: pd.DataFrame) -> tuple[object, StatisticalConfig]:
+    """Calibrate the detector using historical data only."""
+
     print("\n" + "=" * 70)
     print("CALIBRATING STATISTICAL DETECTOR")
     print("=" * 70)
 
-    if config is None:
-        config = StatisticalConfig()
-
+    config = StatisticalConfig()
     calibration = calibrate_statistical_detector(historical_df, VARIABLES, config)
 
     print("\n✓ Calibration complete")
@@ -65,604 +91,679 @@ def train_detector(historical_df, config=None):
     print(f"  Variables: {VARIABLES}")
     print(f"  ROC percentile: {config.roc_percentile}")
     print(f"  Z-score threshold: {config.zscore_threshold}")
-    print(f"  Z-score windows: {config.zscore_windows} hours")
-    print(f"  Persistence window: {config.persistence_window} hours")
+    print(f"  Z-score windows: {config.zscore_windows}")
+    print(f"  Persistence window: {config.persistence_window}")
 
     return calibration, config
 
 
-def evaluate_detector(present_df, calibration, config):
-    """Run the calibrated detector on unseen 2026 data."""
+def inject_evaluation_anomalies(
+    clean_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Inject synthetic anomalies into unseen evaluation data."""
     print("\n" + "=" * 70)
-    print("EVALUATING ON UNSEEN 2026 DATA")
+    print("INJECTING SYNTHETIC ANOMALIES")
     print("=" * 70)
 
-    result_df = run_statistical_detector(present_df, VARIABLES, calibration, config)
+    config = AnomalyConfig(anomaly_rate=0.02, random_seed=RANDOM_SEED)
+    corrupted_df, injection_log = inject_anomalies(clean_df, VARIABLES, config)
+    corrupted_df = corrupted_df.copy()
+
+    if "is_anomaly" not in corrupted_df.columns:
+        corrupted_df["is_anomaly"] = (
+            corrupted_df.get(
+                "synthetic_anomaly", pd.Series(False, index=corrupted_df.index)
+            )
+            .fillna(False)
+            .astype(bool)
+        )
+
+    if "anomaly_id" not in corrupted_df.columns:
+        corrupted_df["anomaly_id"] = corrupted_df.get("synthetic_anomaly_event_id")
+
+    if "anomaly_type" not in corrupted_df.columns:
+        corrupted_df["anomaly_type"] = corrupted_df.get("synthetic_anomaly_type")
+
+    if "anomaly_variable" not in corrupted_df.columns:
+        corrupted_df["anomaly_variable"] = corrupted_df.get(
+            "synthetic_anomaly_variable"
+        )
+
+    if "anomaly_severity" not in corrupted_df.columns:
+        corrupted_df["anomaly_severity"] = corrupted_df.get(
+            "synthetic_anomaly_severity"
+        )
+
+    required_ground_truth = {
+        "is_anomaly",
+        "anomaly_id",
+        "anomaly_type",
+        "anomaly_variable",
+        "anomaly_severity",
+    }
+    missing = required_ground_truth - set(corrupted_df.columns)
+
+    if missing:
+        raise ValueError(
+            f"Missing ground-truth columns after anomaly injection: {sorted(missing)}"
+        )
+
+    SYNTHETIC_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    corrupted_df.to_parquet(STATISTICAL_INJECTED_PARQUET, index=False)
+
+    anomaly_count = int(corrupted_df["is_anomaly"].fillna(False).sum())
+    anomaly_rate = (
+        anomaly_count / len(corrupted_df) * 100 if len(corrupted_df) > 0 else 0.0
+    )
+
+    print("\n✓ Anomaly injection complete")
+    print(f"  Total observations:      {len(corrupted_df):,}")
+    print(f"  Anomalous observations:  {anomaly_count:,}")
+    print(f"  Actual anomaly rate:     {anomaly_rate:.3f}%")
+
+    if injection_log is not None:
+        print(f"  Injected anomaly events: {len(injection_log):,}")
+
+    print(f"\n✓ Injected dataset saved:\n  {STATISTICAL_INJECTED_PARQUET}")
+
+    return corrupted_df, injection_log
+
+
+def run_detector(
+    evaluation_df: pd.DataFrame, calibration, config: StatisticalConfig
+) -> pd.DataFrame:
+    """Run the calibrated statistical detector."""
+    print("\n" + "=" * 70)
+    print("RUNNING STATISTICAL DETECTOR")
+    print("=" * 70)
+
+    result_df = run_statistical_detector(evaluation_df, VARIABLES, calibration, config)
 
     total_rows = len(result_df)
-    alert_rows = int(result_df["statistical_alert"].sum())
-    alert_rate = alert_rows / total_rows * 100 if total_rows > 0 else 0.0
-    avg_flags = (
-        result_df.loc[result_df["statistical_alert"], "statistical_flag_count"].mean()
-        if alert_rows > 0
-        else 0.0
-    )
+    alert_count = int(result_df["statistical_alert"].fillna(False).sum())
+    alert_rate = alert_count / total_rows * 100 if total_rows > 0 else 0.0
 
     print("\n✓ Detection complete")
     print(f"  Total observations: {total_rows:,}")
-    print(f"  Alert observations: {alert_rows:,} ({alert_rate:.4f}%)")
-    print(f"  Average flags per alert: {avg_flags:.2f}")
+    print(f"  Statistical alerts: {alert_count:,}")
+    print(f"  Alert rate:         {alert_rate:.4f}%")
 
     return result_df
 
 
-def generate_alert_summary(result_df):
-    """Generate alert counts and rates by individual detector."""
+def calculate_binary_metrics(y_true: pd.Series, y_pred: pd.Series) -> dict:
+    """Calculate binary classification metrics."""
+    y_true = y_true.fillna(False).astype(bool)
+    y_pred = y_pred.fillna(False).astype(bool)
+
+    tp = int((y_true & y_pred).sum())
+    fp = int((~y_true & y_pred).sum())
+    fn = int((y_true & ~y_pred).sum())
+    tn = int((~y_true & ~y_pred).sum())
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if (precision + recall) > 0
+        else 0.0
+    )
+    false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+
+    return {
+        "true_positive": tp,
+        "false_positive": fp,
+        "false_negative": fn,
+        "true_negative": tn,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "false_positive_rate": false_positive_rate,
+    }
+
+
+def evaluate_observation_level(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Evaluate observation-level anomaly detection performance."""
     print("\n" + "=" * 70)
-    print("ALERT SUMMARY BY INDIVIDUAL DETECTOR")
+    print("OBSERVATION-LEVEL PERFORMANCE")
     print("=" * 70)
 
-    summary = summarize_statistical_alerts(result_df, VARIABLES)
-    summary["alert_rate_percent"] = summary["alert_rate"] * 100
-    summary = summary.sort_values("alert_count", ascending=False)
+    if "is_anomaly" not in result_df.columns:
+        raise ValueError("Ground-truth column 'is_anomaly' not found.")
 
-    display_columns = ["variable", "detector", "alert_count", "alert_rate_percent"]
+    metrics = calculate_binary_metrics(
+        result_df["is_anomaly"], result_df["statistical_alert"]
+    )
+    metrics_df = pd.DataFrame(
+        [{"metric": metric, "value": value} for metric, value in metrics.items()]
+    )
 
-    print(summary[display_columns].round(4).to_string(index=False))
+    print(f"\nTrue Positives:  {metrics['true_positive']:,}")
+    print(f"False Positives: {metrics['false_positive']:,}")
+    print(f"False Negatives: {metrics['false_negative']:,}")
+    print(f"True Negatives:  {metrics['true_negative']:,}")
+
+    print("\nClassification metrics:")
+    print(f"  Precision:           {metrics['precision']:.4f}")
+    print(f"  Recall:              {metrics['recall']:.4f}")
+    print(f"  F1 Score:            {metrics['f1_score']:.4f}")
+    print(f"  False Positive Rate: {metrics['false_positive_rate']:.4f}")
+
+    return metrics_df
+
+
+def evaluate_event_level(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Evaluate event-level detection."""
+    print("\n" + "=" * 70)
+    print("EVENT-LEVEL PERFORMANCE")
+    print("=" * 70)
+
+    anomaly_rows = result_df[result_df["is_anomaly"].fillna(False)].copy()
+
+    if anomaly_rows.empty:
+        print("No anomaly observations found.")
+        return pd.DataFrame()
+
+    if "anomaly_id" not in anomaly_rows.columns:
+        print("⚠ anomaly_id not found. Skipping event evaluation.")
+        return pd.DataFrame()
+
+    event_stats = (
+        anomaly_rows.dropna(subset=["anomaly_id"])
+        .groupby("anomaly_id")
+        .agg(
+            anomaly_type=("anomaly_type", "first"),
+            variable=("anomaly_variable", "first"),
+            severity=("anomaly_severity", "first"),
+            duration=("anomaly_id", "size"),
+            detected=("statistical_alert", "any"),
+            observations_detected=("statistical_alert", "sum"),
+        )
+        .reset_index()
+    )
+
+    total_events = len(event_stats)
+    detected_events = int(event_stats["detected"].sum())
+    event_recall = detected_events / total_events if total_events > 0 else 0.0
+
+    print(f"\nTotal anomaly events:    {total_events:,}")
+    print(f"Detected anomaly events: {detected_events:,}")
+    print(f"Missed anomaly events:   {total_events - detected_events:,}")
+    print(f"Event-level recall:      {event_recall:.4f}")
+
+    return event_stats
+
+
+def evaluate_by_anomaly_type(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Evaluate recall by synthetic anomaly type."""
+    print("\n" + "=" * 70)
+    print("PERFORMANCE BY ANOMALY TYPE")
+    print("=" * 70)
+
+    anomaly_rows = result_df[result_df["is_anomaly"].fillna(False)].copy()
+
+    if anomaly_rows.empty:
+        return pd.DataFrame()
+
+    rows = []
+
+    for anomaly_type, group in anomaly_rows.groupby("anomaly_type", dropna=False):
+        total = len(group)
+        detected = int(group["statistical_alert"].fillna(False).sum())
+        recall = detected / total if total > 0 else 0.0
+
+        rows.append(
+            {
+                "anomaly_type": anomaly_type,
+                "total_observations": total,
+                "detected": detected,
+                "missed": total - detected,
+                "recall": recall,
+                "recall_percent": recall * 100,
+            }
+        )
+
+    summary = (
+        pd.DataFrame(rows).sort_values("recall", ascending=False).reset_index(drop=True)
+    )
+
+    print(
+        summary.to_string(
+            index=False,
+            formatters={"recall": "{:.4f}".format, "recall_percent": "{:.2f}".format},
+        )
+    )
+
     return summary
 
 
-def generate_station_statistics(result_df):
-    """Generate alert statistics for each station."""
+def evaluate_by_variable(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Evaluate recall by injected anomaly variable."""
     print("\n" + "=" * 70)
-    print("ALERTS BY STATION")
+    print("PERFORMANCE BY ANOMALY VARIABLE")
     print("=" * 70)
 
-    station_stats = result_df.groupby("station_id").agg(
-        alert_count=("statistical_alert", "sum"),
-        alert_rate=("statistical_alert", "mean"),
-        avg_flags=("statistical_flag_count", "mean"),
-        max_flags=("statistical_flag_count", "max"),
-        total_observations=("timestamp", "count"),
-    )
-    station_stats["alert_rate_percent"] = station_stats["alert_rate"] * 100
-    station_stats = station_stats.sort_values("alert_rate_percent", ascending=False)
+    anomaly_rows = result_df[result_df["is_anomaly"].fillna(False)].copy()
+    rows = []
 
-    display_columns = [
-        "alert_count",
-        "alert_rate_percent",
-        "avg_flags",
-        "max_flags",
-        "total_observations",
-    ]
+    for variable in VARIABLES:
+        variable_rows = anomaly_rows[anomaly_rows["anomaly_variable"] == variable]
+        total = len(variable_rows)
+        detected = int(variable_rows["statistical_alert"].fillna(False).sum())
+        recall = detected / total if total > 0 else 0.0
 
-    print(station_stats[display_columns].round(4).to_string())
-    return station_stats
+        rows.append(
+            {
+                "variable": variable,
+                "anomaly_observations": total,
+                "detected": detected,
+                "missed": total - detected,
+                "recall": recall,
+                "recall_percent": recall * 100,
+            }
+        )
 
-
-def generate_temporal_analysis(result_df):
-    """Analyze alert patterns across dates and hours."""
-    print("\n" + "=" * 70)
-    print("TEMPORAL ALERT PATTERNS")
-    print("=" * 70)
-
-    df = result_df.copy()
-    df["date"] = df["timestamp"].dt.date
-    df["hour"] = df["timestamp"].dt.hour
-
-    daily_alerts = df.groupby("date").agg(
-        alert_count=("statistical_alert", "sum"),
-        alert_rate=("statistical_alert", "mean"),
-    )
-    daily_alerts["alert_rate_percent"] = daily_alerts["alert_rate"] * 100
-
-    hourly_alerts = df.groupby("hour").agg(
-        alert_count=("statistical_alert", "sum"),
-        alert_rate=("statistical_alert", "mean"),
-    )
-    hourly_alerts["alert_rate_percent"] = hourly_alerts["alert_rate"] * 100
-
-    print("\nTop 10 days by alert count:")
-    print(daily_alerts.sort_values("alert_count", ascending=False).head(10).round(4).to_string())
-
-    print("\nHourly alert patterns:")
-    print(hourly_alerts.round(4).to_string())
-
-    return daily_alerts, hourly_alerts
-
-
-def analyze_flag_count_distribution(result_df):
-    """Analyze how many detector signals fire simultaneously."""
-    print("\n" + "=" * 70)
-    print("DIAGNOSTIC: FLAG COUNT DISTRIBUTION")
-    print("=" * 70)
-
-    total_rows = len(result_df)
-    distribution = (
-        result_df["statistical_flag_count"]
-        .value_counts()
-        .sort_index()
-        .rename_axis("flag_count")
-        .reset_index(name="observation_count")
-    )
-    distribution["observation_rate"] = distribution["observation_count"] / total_rows
-    distribution["observation_rate_percent"] = distribution["observation_rate"] * 100
+    summary = pd.DataFrame(rows)
 
     print(
-        distribution[["flag_count", "observation_count", "observation_rate_percent"]]
-        .round(4)
-        .to_string(index=False)
+        summary.to_string(
+            index=False,
+            formatters={"recall": "{:.4f}".format, "recall_percent": "{:.2f}".format},
+        )
     )
 
-    alert_distribution = distribution[distribution["flag_count"] > 0].copy()
-    total_alerts = alert_distribution["observation_count"].sum()
+    return summary
 
-    if total_alerts > 0:
-        alert_distribution["share_of_alerts_percent"] = (
-            alert_distribution["observation_count"] / total_alerts * 100
+
+def analyze_false_positives(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Analyze false positives by station."""
+    print("\n" + "=" * 70)
+    print("FALSE POSITIVE ANALYSIS")
+    print("=" * 70)
+
+    clean_rows = result_df[~result_df["is_anomaly"].fillna(False)].copy()
+    false_positives = clean_rows[clean_rows["statistical_alert"].fillna(False)].copy()
+
+    total_clean = len(clean_rows)
+    fp_count = len(false_positives)
+    fp_rate = fp_count / total_clean * 100 if total_clean > 0 else 0.0
+
+    print(f"\nClean observations: {total_clean:,}")
+    print(f"False positives:    {fp_count:,}")
+    print(f"False positive rate: {fp_rate:.4f}%")
+
+    if false_positives.empty:
+        return pd.DataFrame()
+
+    station_summary = (
+        false_positives.groupby("station_id")
+        .size()
+        .rename("false_positive_count")
+        .reset_index()
+        .sort_values("false_positive_count", ascending=False)
+    )
+
+    print("\nFalse positives by station:")
+    print(station_summary.to_string(index=False))
+
+    return station_summary
+
+
+def get_detector_columns(result_df: pd.DataFrame) -> list[str]:
+    """Return real statistical detector flag columns."""
+    columns = []
+
+    for variable in VARIABLES:
+        expected = [
+            f"{variable}_range_anomaly",
+            f"{variable}_roc_anomaly",
+            f"{variable}_persistence_anomaly",
+        ]
+        columns.extend(column for column in expected if column in result_df.columns)
+        columns.extend(
+            column
+            for column in result_df.columns
+            if column.startswith(f"{variable}_zscore_") and column.endswith("_anomaly")
         )
-        print("\nAmong alert observations:")
+
+    return sorted(set(columns))
+
+
+def analyze_detector_firing_rates(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Show how often individual statistical signals fire."""
+    print("\n" + "=" * 70)
+    print("INDIVIDUAL DETECTOR FIRING RATES")
+    print("=" * 70)
+
+    detector_columns = get_detector_columns(result_df)
+    rows = []
+
+    for column in detector_columns:
+        count = int(result_df[column].fillna(False).astype(bool).sum())
+        rate = count / len(result_df) if len(result_df) > 0 else 0.0
+        rows.append(
+            {
+                "detector": column,
+                "alert_count": count,
+                "alert_rate": rate,
+                "alert_rate_percent": rate * 100,
+            }
+        )
+
+    summary = (
+        pd.DataFrame(rows)
+        .sort_values("alert_count", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    if not summary.empty:
         print(
-            alert_distribution[["flag_count", "observation_count", "share_of_alerts_percent"]]
+            summary[["detector", "alert_count", "alert_rate_percent"]]
             .round(4)
             .to_string(index=False)
         )
 
-    return distribution
-
-
-def add_evidence_family_columns(result_df):
-    """Add family-level detector booleans."""
-    df = result_df.copy()
-
-    range_columns = [
-        f"{variable}_range_anomaly"
-        for variable in VARIABLES
-        if f"{variable}_range_anomaly" in df.columns
-    ]
-    roc_columns = [
-        f"{variable}_roc_anomaly"
-        for variable in VARIABLES
-        if f"{variable}_roc_anomaly" in df.columns
-    ]
-    persistence_columns = [
-        f"{variable}_persistence_anomaly"
-        for variable in VARIABLES
-        if f"{variable}_persistence_anomaly" in df.columns
-    ]
-
-    level_columns = []
-    for variable in VARIABLES:
-        for column in df.columns:
-            if column.startswith(f"{variable}_zscore_") and column.endswith("_anomaly"):
-                level_columns.append(column)
-
-    def any_flag(columns):
-        if not columns:
-            return pd.Series(False, index=df.index, dtype=bool)
-        return df[columns].fillna(False).astype(bool).any(axis=1)
-
-    df["family_range"] = any_flag(range_columns)
-    df["family_roc"] = any_flag(roc_columns)
-    df["family_level"] = any_flag(level_columns)
-    df["family_persistence"] = any_flag(persistence_columns)
-
-    family_columns = ["family_range", "family_roc", "family_level", "family_persistence"]
-    df["evidence_family_count"] = df[family_columns].sum(axis=1)
-
-    return df
-
-
-def analyze_evidence_families(result_df):
-    """Analyze firing rates of conceptual evidence families."""
-    print("\n" + "=" * 70)
-    print("DIAGNOSTIC: EVIDENCE FAMILY ANALYSIS")
-    print("=" * 70)
-
-    df = add_evidence_family_columns(result_df)
-
-    family_columns = ["family_range", "family_roc", "family_level", "family_persistence"]
-    rows = []
-    for column in family_columns:
-        count = int(df[column].sum())
-        rate = count / len(df) * 100 if len(df) > 0 else 0.0
-        rows.append(
-            {
-                "evidence_family": column.replace("family_", ""),
-                "observation_count": count,
-                "observation_rate_percent": rate,
-            }
-        )
-
-    family_summary = pd.DataFrame(rows)
-    print(family_summary.sort_values("observation_count", ascending=False).round(4).to_string(index=False))
-
-    return df, family_summary
-
-
-def analyze_evidence_combinations(df):
-    """Analyze combinations of evidence families."""
-    print("\n" + "=" * 70)
-    print("DIAGNOSTIC: EVIDENCE FAMILY COMBINATIONS")
-    print("=" * 70)
-
-    family_mapping = {
-        "family_range": "RANGE",
-        "family_roc": "ROC",
-        "family_level": "LEVEL",
-        "family_persistence": "PERSISTENCE",
-    }
-    family_columns = list(family_mapping.keys())
-
-    def build_combination(row):
-        active_families = [family_mapping[column] for column in family_columns if bool(row[column])]
-        return " + ".join(active_families) if active_families else "NONE"
-
-    df = df.copy()
-    df["evidence_combination"] = df.apply(build_combination, axis=1)
-
-    combination_summary = (
-        df["evidence_combination"]
-        .value_counts()
-        .rename_axis("evidence_combination")
-        .reset_index(name="observation_count")
-    )
-    combination_summary["observation_rate_percent"] = (
-        combination_summary["observation_count"] / len(df) * 100
-    )
-
-    alert_combinations = combination_summary[combination_summary["evidence_combination"] != "NONE"].copy()
-    total_alert_family_rows = alert_combinations["observation_count"].sum()
-
-    if total_alert_family_rows > 0:
-        alert_combinations["share_of_family_alerts_percent"] = (
-            alert_combinations["observation_count"] / total_alert_family_rows * 100
-        )
-
-    print(alert_combinations.round(4).to_string(index=False))
-    return combination_summary
-
-
-def analyze_variable_involvement(result_df):
-    """Analyze which weather variables contribute evidence."""
-    print("\n" + "=" * 70)
-    print("DIAGNOSTIC: VARIABLE INVOLVEMENT")
-    print("=" * 70)
-
-    df = result_df.copy()
-
-    for variable in VARIABLES:
-        columns = [
-            column
-            for column in df.columns
-            if (column.startswith(f"{variable}_") and column.endswith("_anomaly"))
-        ]
-        if columns:
-            df[f"{variable}_involved"] = df[columns].fillna(False).astype(bool).any(axis=1)
-        else:
-            df[f"{variable}_involved"] = False
-
-    def build_variable_combination(row):
-        active_variables = [
-            variable.upper() for variable in VARIABLES if bool(row[f"{variable}_involved"])
-        ]
-        return " + ".join(active_variables) if active_variables else "NONE"
-
-    df["variable_combination"] = df.apply(build_variable_combination, axis=1)
-
-    summary = (
-        df["variable_combination"]
-        .value_counts()
-        .rename_axis("variable_combination")
-        .reset_index(name="observation_count")
-    )
-    summary["observation_rate_percent"] = summary["observation_count"] / len(df) * 100
-
-    alert_summary = summary[summary["variable_combination"] != "NONE"].copy()
-    total_alerts = alert_summary["observation_count"].sum()
-
-    if total_alerts > 0:
-        alert_summary["share_of_alerts_percent"] = (
-            alert_summary["observation_count"] / total_alerts * 100
-        )
-
-    print(alert_summary.round(4).to_string(index=False))
     return summary
 
 
-def analyze_alert_streaks(result_df):
-    """Analyze consecutive alert streaks separately for each station."""
+def analyze_evidence_families(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Analyze detector evidence families."""
     print("\n" + "=" * 70)
-    print("DIAGNOSTIC: ALERT STREAK ANALYSIS")
+    print("EVIDENCE FAMILY ANALYSIS")
     print("=" * 70)
 
-    df = result_df.copy().sort_values(["station_id", "timestamp"]).reset_index(drop=True)
-    streak_records = []
-
-    for station_id, station_df in df.groupby("station_id"):
-        station_df = station_df.copy()
-        alert = station_df["statistical_alert"].astype(bool)
-        previous_alert = alert.shift(fill_value=False)
-        timestamp_gap = station_df["timestamp"].diff().dt.total_seconds().div(3600)
-        new_streak = alert & (~previous_alert | (timestamp_gap != 1))
-
-        station_df["streak_id"] = new_streak.cumsum()
-        alert_rows = station_df[alert]
-
-        for streak_id, streak_df in alert_rows.groupby("streak_id"):
-            if streak_df.empty:
-                continue
-
-            start_time = streak_df["timestamp"].min()
-            end_time = streak_df["timestamp"].max()
-            duration_hours = int((end_time - start_time).total_seconds() / 3600) + 1
-
-            streak_records.append(
-                {
-                    "station_id": station_id,
-                    "streak_id": int(streak_id),
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "duration_hours": duration_hours,
-                    "observations": len(streak_df),
-                    "max_flag_count": int(streak_df["statistical_flag_count"].max()),
-                    "avg_flag_count": float(streak_df["statistical_flag_count"].mean()),
-                }
-            )
-
-    streak_df = pd.DataFrame(streak_records)
-
-    if streak_df.empty:
-        print("No alert streaks detected.")
-        return streak_df, pd.DataFrame()
-
-    streak_distribution = (
-        streak_df["duration_hours"]
-        .value_counts()
-        .sort_index()
-        .rename_axis("duration_hours")
-        .reset_index(name="streak_count")
-    )
-    streak_distribution["share_percent"] = streak_distribution["streak_count"] / len(streak_df) * 100
-
-    print(f"Total alert streaks: {len(streak_df):,}")
-    print("\nStreak duration distribution:")
-    print(streak_distribution.round(4).to_string(index=False))
-    print("\nLongest alert streaks:")
-    print(streak_df.sort_values("duration_hours", ascending=False).head(10).to_string(index=False))
-
-    return streak_df, streak_distribution
-
-
-def show_alert_examples(result_df, n=10):
-    """Display sample alerts for manual inspection."""
-    print("\n" + "=" * 70)
-    print("SAMPLE ALERTS")
-    print("=" * 70)
-
-    alerts = result_df[result_df["statistical_alert"]].copy()
-    if alerts.empty:
-        print("No alerts detected.")
-        return
-
-    anomaly_columns = [col for col in alerts.columns if col.endswith("_anomaly")]
-    base_columns = [
-        "timestamp",
-        "station_id",
-        "temperature",
-        "humidity",
-        "pressure",
-        "statistical_flag_count",
+    family_columns = [
+        "evidence_range",
+        "evidence_roc",
+        "evidence_level",
+        "evidence_persistence",
     ]
-    available_columns = [col for col in base_columns if col in alerts.columns]
-    display_columns = available_columns + anomaly_columns
+    available_columns = [
+        column for column in family_columns if column in result_df.columns
+    ]
 
-    print(alerts[display_columns].head(n).to_string(index=False))
+    if not available_columns:
+        print("No evidence-family columns found.")
+        return pd.DataFrame()
+
+    rows = []
+    for column in available_columns:
+        count = int(result_df[column].fillna(False).astype(bool).sum())
+        rate = count / len(result_df) if len(result_df) > 0 else 0.0
+        rows.append(
+            {
+                "evidence_family": column.replace("evidence_", ""),
+                "observations": count,
+                "rate": rate,
+                "rate_percent": rate * 100,
+            }
+        )
+
+    summary = (
+        pd.DataFrame(rows)
+        .sort_values("observations", ascending=False)
+        .reset_index(drop=True)
+    )
+    print(summary.round(4).to_string(index=False))
+
+    return summary
 
 
-def plot_detector_evaluation(result_df, family_df, output_dir):
-    """Generate evaluation and diagnostic visualizations."""
+def analyze_station_alerts(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Analyze alert rates by station."""
+    print("\n" + "=" * 70)
+    print("ALERT RATE BY STATION")
+    print("=" * 70)
+
+    station_summary = (
+        result_df.groupby("station_id")
+        .agg(
+            total_observations=("timestamp", "size"),
+            alert_count=("statistical_alert", "sum"),
+            alert_rate=("statistical_alert", "mean"),
+        )
+        .reset_index()
+    )
+    station_summary["alert_rate_percent"] = station_summary["alert_rate"] * 100
+    station_summary = station_summary.sort_values("alert_rate", ascending=False)
+
+    print(
+        station_summary[
+            ["station_id", "total_observations", "alert_count", "alert_rate_percent"]
+        ]
+        .round(4)
+        .to_string(index=False)
+    )
+
+    return station_summary
+
+
+def analyze_severity_distribution(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Inspect anomaly severity distribution."""
+    print("\n" + "=" * 70)
+    print("STATISTICAL SEVERITY DISTRIBUTION")
+    print("=" * 70)
+
+    severity_column = "statistical_severity_label"
+
+    if severity_column not in result_df.columns:
+        print("Severity column not found.")
+        return pd.DataFrame()
+
+    summary = (
+        result_df.groupby(severity_column)
+        .agg(
+            observations=("station_id", "size"),
+            injected_anomalies=("is_anomaly", "sum"),
+            alerts=("statistical_alert", "sum"),
+        )
+        .reset_index()
+    )
+    summary["anomaly_rate_percent"] = (
+        summary["injected_anomalies"] / summary["observations"] * 100
+    )
+
+    print(summary.round(4).to_string(index=False))
+    return summary
+
+
+def generate_alert_summary(result_df: pd.DataFrame) -> pd.DataFrame:
+    """Generate alert counts for individual detector signals."""
+    print("\n" + "=" * 70)
+    print("ALERT SUMMARY")
+    print("=" * 70)
+
+    summary = summarize_statistical_alerts(result_df, VARIABLES)
+    summary = summary[
+        ~summary["detector"].str.contains("synthetic", case=False, na=False)
+    ].copy()
+    summary["alert_rate_percent"] = summary["alert_rate"] * 100
+    summary = summary.sort_values("alert_count", ascending=False)
+
+    print(
+        summary[["variable", "detector", "alert_count", "alert_rate_percent"]]
+        .round(4)
+        .to_string(index=False)
+    )
+
+    return summary
+
+
+def generate_plots(
+    result_df: pd.DataFrame, anomaly_type_summary: pd.DataFrame, output_dir: Path
+) -> None:
+    """Generate compact evaluation plots."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    df = result_df.copy()
-    df["date"] = df["timestamp"].dt.date
-    df["hour"] = df["timestamp"].dt.hour
-
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("Statistical Detector Behavior on Unseen 2026 Data", fontsize=16, fontweight="bold")
+    fig.suptitle("Statistical Detector Evaluation", fontsize=16, fontweight="bold")
 
-    daily_alert_rate = df.groupby("date")["statistical_alert"].mean() * 100
-    axes[0, 0].plot(daily_alert_rate.index, daily_alert_rate.values, linewidth=1.2)
-    axes[0, 0].set_title("Daily Alert Rate")
-    axes[0, 0].set_xlabel("Date")
-    axes[0, 0].set_ylabel("Alert Rate (%)")
-    axes[0, 0].grid(True, alpha=0.3)
-    axes[0, 0].tick_params(axis="x", rotation=45)
+    y_true = result_df["is_anomaly"].fillna(False).astype(bool)
+    y_pred = result_df["statistical_alert"].fillna(False).astype(bool)
 
-    hourly_alert_rate = df.groupby("hour")["statistical_alert"].mean() * 100
-    axes[0, 1].bar(hourly_alert_rate.index, hourly_alert_rate.values)
-    axes[0, 1].set_title("Hourly Alert Rate Pattern")
-    axes[0, 1].set_xlabel("Hour of Day")
-    axes[0, 1].set_ylabel("Alert Rate (%)")
-    axes[0, 1].grid(True, alpha=0.3, axis="y")
+    tp = int((y_true & y_pred).sum())
+    fp = int((~y_true & y_pred).sum())
+    fn = int((y_true & ~y_pred).sum())
+    tn = int((~y_true & ~y_pred).sum())
 
-    station_alert_rate = df.groupby("station_id")["statistical_alert"].mean() * 100
-    station_alert_rate = station_alert_rate.sort_values(ascending=True)
-    axes[1, 0].barh(station_alert_rate.index, station_alert_rate.values)
-    axes[1, 0].set_title("Alert Rate by Station")
-    axes[1, 0].set_xlabel("Alert Rate (%)")
-    axes[1, 0].grid(True, alpha=0.3, axis="x")
+    matrix = np.array([[tn, fp], [fn, tp]])
+    axes[0, 0].imshow(matrix)
+    axes[0, 0].set_xticks([0, 1])
+    axes[0, 0].set_xticklabels(["Normal", "Anomaly"])
+    axes[0, 0].set_yticks([0, 1])
+    axes[0, 0].set_yticklabels(["Normal", "Anomaly"])
+    axes[0, 0].set_xlabel("Predicted")
+    axes[0, 0].set_ylabel("Ground Truth")
+    axes[0, 0].set_title("Confusion Matrix")
 
-    flag_dist = df["statistical_flag_count"].value_counts().sort_index()
-    axes[1, 1].bar(flag_dist.index, flag_dist.values)
-    axes[1, 1].set_title("Distribution of Detector Flag Counts")
-    axes[1, 1].set_xlabel("Number of Triggered Detectors")
-    axes[1, 1].set_ylabel("Number of Observations")
-    axes[1, 1].grid(True, alpha=0.3, axis="y")
-
-    plt.tight_layout()
-    output_path = output_dir / "detector_evaluation.png"
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"\n✓ Evaluation plot saved:\n  {output_path}")
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("Statistical Detector Diagnostic Analysis", fontsize=16, fontweight="bold")
-
-    anomaly_columns = [col for col in df.columns if col.endswith("_anomaly")]
-    detector_rates = df[anomaly_columns].fillna(False).astype(bool).mean() * 100
-    detector_rates = detector_rates.sort_values(ascending=True)
-    axes[0, 0].barh(detector_rates.index, detector_rates.values)
-    axes[0, 0].set_title("Individual Detector Firing Rates")
-    axes[0, 0].set_xlabel("Observation Rate (%)")
-    axes[0, 0].grid(True, alpha=0.3, axis="x")
-
-    family_columns = ["family_range", "family_roc", "family_level", "family_persistence"]
-    family_rates = family_df[family_columns].mean() * 100
-    family_rates.index = [column.replace("family_", "").title() for column in family_rates.index]
-    axes[0, 1].bar(family_rates.index, family_rates.values)
-    axes[0, 1].set_title("Evidence Family Firing Rates")
-    axes[0, 1].set_ylabel("Observation Rate (%)")
-    axes[0, 1].grid(True, alpha=0.3, axis="y")
-
-    family_count_dist = family_df["evidence_family_count"].value_counts().sort_index()
-    axes[1, 0].bar(family_count_dist.index, family_count_dist.values)
-    axes[1, 0].set_title("Independent Evidence Families per Observation")
-    axes[1, 0].set_xlabel("Number of Evidence Families")
-    axes[1, 0].set_ylabel("Number of Observations")
-    axes[1, 0].grid(True, alpha=0.3, axis="y")
-
-    variable_rates = {}
-    for variable in VARIABLES:
-        anomaly_columns = [
-            column for column in df.columns if (column.startswith(f"{variable}_") and column.endswith("_anomaly"))
-        ]
-        if anomaly_columns:
-            variable_rates[variable] = (
-                df[anomaly_columns].fillna(False).astype(bool).any(axis=1).mean() * 100
+    labels = [["TN", "FP"], ["FN", "TP"]]
+    for i in range(2):
+        for j in range(2):
+            axes[0, 0].text(
+                j,
+                i,
+                f"{labels[i][j]}\n{matrix[i, j]:,}",
+                ha="center",
+                va="center",
+                fontsize=12,
             )
 
-    axes[1, 1].bar(list(variable_rates.keys()), list(variable_rates.values()))
-    axes[1, 1].set_title("Variable Involvement Rate")
-    axes[1, 1].set_ylabel("Observation Rate (%)")
-    axes[1, 1].grid(True, alpha=0.3, axis="y")
+    if anomaly_type_summary is not None and not anomaly_type_summary.empty:
+        axes[0, 1].bar(
+            anomaly_type_summary["anomaly_type"].astype(str),
+            anomaly_type_summary["recall_percent"],
+        )
+        axes[0, 1].set_title("Recall by Anomaly Type")
+        axes[0, 1].set_xlabel("Anomaly Type")
+        axes[0, 1].set_ylabel("Recall (%)")
+        axes[0, 1].set_ylim(0, 100)
+        axes[0, 1].tick_params(axis="x", rotation=45)
+        axes[0, 1].grid(axis="y", alpha=0.3)
+
+    station_alert_rate = (
+        result_df.groupby("station_id")["statistical_alert"].mean().sort_values() * 100
+    )
+    axes[1, 0].barh(station_alert_rate.index.astype(str), station_alert_rate.values)
+    axes[1, 0].set_title("Alert Rate by Station")
+    axes[1, 0].set_xlabel("Alert Rate (%)")
+    axes[1, 0].grid(axis="x", alpha=0.3)
+
+    if "statistical_severity_label" in result_df.columns:
+        severity_counts = result_df["statistical_severity_label"].value_counts()
+        axes[1, 1].bar(severity_counts.index.astype(str), severity_counts.values)
+        axes[1, 1].set_title("Statistical Severity Distribution")
+        axes[1, 1].set_xlabel("Severity")
+        axes[1, 1].set_ylabel("Observations")
+        axes[1, 1].grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
-    diagnostic_path = output_dir / "diagnostic_analysis.png"
-    plt.savefig(diagnostic_path, dpi=150, bbox_inches="tight")
+    output_path = output_dir / "statistical_detector_evaluation.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"✓ Diagnostic plot saved:\n  {diagnostic_path}")
+
+    print(f"\n✓ Evaluation plot saved:\n  {output_path}")
 
 
 def save_results(
-    result_df,
-    summary_df,
-    station_stats,
-    daily_alerts,
-    hourly_alerts,
-    flag_distribution,
-    family_summary,
-    combination_summary,
-    variable_summary,
-    streak_df,
-    streak_distribution,
-    output_dir
-):
-    """Save all evaluation and diagnostic outputs."""
+    result_df: pd.DataFrame,
+    observation_metrics: pd.DataFrame,
+    event_metrics: pd.DataFrame,
+    anomaly_type_summary: pd.DataFrame,
+    variable_summary: pd.DataFrame,
+    false_positive_summary: pd.DataFrame,
+    detector_summary: pd.DataFrame,
+    evidence_family_summary: pd.DataFrame,
+    station_summary: pd.DataFrame,
+    severity_summary: pd.DataFrame,
+    injection_log: pd.DataFrame | None,
+    output_dir: Path,
+) -> None:
+    """Save evaluation outputs."""
+    print("\n" + "=" * 70)
+    print("SAVING RESULTS")
+    print("=" * 70)
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    alert_df = result_df[result_df["statistical_alert"]].copy().sort_values("timestamp")
-    alerts_path = output_dir / "alerts.csv"
-    alert_df.to_csv(alerts_path, index=False)
-    print(f"✓ Alerts saved: {alerts_path} ({len(alert_df):,} rows)")
+    if injection_log is not None and not injection_log.empty:
+        path = output_dir / "injection_log.csv"
+        injection_log.to_csv(path, index=False)
+        print(f"✓ Saved: {path}")
 
-    summary_path = output_dir / "alert_summary.csv"
-    summary_df.to_csv(summary_path, index=False)
-    print(f"✓ Alert summary saved:\n  {summary_path}")
+    outputs = {
+        "observation_metrics.csv": observation_metrics,
+        "event_metrics.csv": event_metrics,
+        "performance_by_anomaly_type.csv": anomaly_type_summary,
+        "performance_by_variable.csv": variable_summary,
+        "false_positive_analysis.csv": false_positive_summary,
+        "detector_firing_rates.csv": detector_summary,
+        "evidence_family_summary.csv": evidence_family_summary,
+        "station_statistics.csv": station_summary,
+        "severity_distribution.csv": severity_summary,
+    }
 
-    station_path = output_dir / "station_statistics.csv"
-    station_stats.to_csv(station_path)
-    print(f"✓ Station statistics saved:\n  {station_path}")
+    for filename, dataframe in outputs.items():
+        if dataframe is not None and not dataframe.empty:
+            path = output_dir / filename
+            dataframe.to_csv(path, index=False)
+            print(f"✓ Saved: {path}")
 
-    daily_path = output_dir / "daily_alert_statistics.csv"
-    daily_alerts.to_csv(daily_path)
-    print(f"✓ Daily alert statistics saved:\n  {daily_path}")
+    anomaly_predictions = result_df[
+        result_df["is_anomaly"].fillna(False)
+        | result_df["statistical_alert"].fillna(False)
+    ].copy()
 
-    hourly_path = output_dir / "hourly_alert_statistics.csv"
-    hourly_alerts.to_csv(hourly_path)
-    print(f"✓ Hourly alert statistics saved:\n  {hourly_path}")
+    path = output_dir / "anomaly_predictions.csv"
+    anomaly_predictions.to_csv(path, index=False)
+    print(f"✓ Saved: {path} ({len(anomaly_predictions):,} rows)")
 
-    flag_distribution_path = output_dir / "flag_count_distribution.csv"
-    flag_distribution.to_csv(flag_distribution_path, index=False)
-    print(f"✓ Flag-count distribution saved:\n  {flag_distribution_path}")
-
-    family_summary_path = output_dir / "evidence_family_summary.csv"
-    family_summary.to_csv(family_summary_path, index=False)
-    print(f"✓ Evidence-family summary saved:\n  {family_summary_path}")
-
-    combination_path = output_dir / "evidence_combinations.csv"
-    combination_summary.to_csv(combination_path, index=False)
-    print(f"✓ Evidence combinations saved:\n  {combination_path}")
-
-    variable_path = output_dir / "variable_involvement.csv"
-    variable_summary.to_csv(variable_path, index=False)
-    print(f"✓ Variable involvement saved:\n  {variable_path}")
-
-    if not streak_df.empty:
-        streak_path = output_dir / "alert_streaks.csv"
-        streak_df.to_csv(streak_path, index=False)
-        print(f"✓ Alert streaks saved:\n  {streak_path}")
-
-    if not streak_distribution.empty:
-        streak_distribution_path = output_dir / "alert_streak_distribution.csv"
-        streak_distribution.to_csv(streak_distribution_path, index=False)
-        print(f"✓ Alert streak distribution saved:\n  {streak_distribution_path}")
-
-    full_results_path = output_dir / "full_results.parquet"
-    result_df.to_parquet(full_results_path, index=False)
-    print(f"✓ Full results saved:\n  {full_results_path}")
+    path = output_dir / "full_results.parquet"
+    result_df.to_parquet(path, index=False)
+    print(f"✓ Saved: {path}")
 
 
-def main():
+def main() -> None:
     print("\n" + "=" * 70)
-    print("STATISTICAL DETECTOR EVALUATION + DIAGNOSTIC ANALYSIS")
+    print("STATISTICAL DETECTOR EVALUATION")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    historical_df, present_df = load_datasets()
-    calibration, config = train_detector(historical_df)
-    result_df = evaluate_detector(present_df, calibration, config)
+    historical_df, clean_present_df = load_datasets()
+    calibration, config = calibrate_detector(historical_df)
+    corrupted_df, injection_log = inject_evaluation_anomalies(clean_present_df)
+    result_df = run_detector(corrupted_df, calibration, config)
 
-    summary_df = generate_alert_summary(result_df)
-    station_stats = generate_station_statistics(result_df)
-    daily_alerts, hourly_alerts = generate_temporal_analysis(result_df)
+    observation_metrics = evaluate_observation_level(result_df)
+    event_metrics = evaluate_event_level(result_df)
+    anomaly_type_summary = evaluate_by_anomaly_type(result_df)
+    variable_summary = evaluate_by_variable(result_df)
+    false_positive_summary = analyze_false_positives(result_df)
 
-    flag_distribution = analyze_flag_count_distribution(result_df)
-    family_df, family_summary = analyze_evidence_families(result_df)
-    combination_summary = analyze_evidence_combinations(family_df)
-    variable_summary = analyze_variable_involvement(result_df)
-    streak_df, streak_distribution = analyze_alert_streaks(result_df)
+    detector_summary = analyze_detector_firing_rates(result_df)
+    evidence_family_summary = analyze_evidence_families(result_df)
+    station_summary = analyze_station_alerts(result_df)
+    severity_summary = analyze_severity_distribution(result_df)
 
-    show_alert_examples(result_df, n=10)
-    plot_detector_evaluation(result_df, family_df, RESULTS_STATISTICAL_DIR)
+    generate_plots(result_df, anomaly_type_summary, RESULTS_STATISTICAL_DIR)
 
     save_results(
         result_df=result_df,
-        summary_df=summary_df,
-        station_stats=station_stats,
-        daily_alerts=daily_alerts,
-        hourly_alerts=hourly_alerts,
-        flag_distribution=flag_distribution,
-        family_summary=family_summary,
-        combination_summary=combination_summary,
+        observation_metrics=observation_metrics,
+        event_metrics=event_metrics,
+        anomaly_type_summary=anomaly_type_summary,
         variable_summary=variable_summary,
-        streak_df=streak_df,
-        streak_distribution=streak_distribution,
+        false_positive_summary=false_positive_summary,
+        detector_summary=detector_summary,
+        evidence_family_summary=evidence_family_summary,
+        station_summary=station_summary,
+        severity_summary=severity_summary,
+        injection_log=injection_log,
         output_dir=RESULTS_STATISTICAL_DIR,
     )
 
     print("\n" + "=" * 70)
-    print(f"Evaluation and diagnostic analysis complete: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("STATISTICAL EVALUATION COMPLETE")
+    print(f"Finished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Results saved to:\n{RESULTS_STATISTICAL_DIR}")
     print("=" * 70 + "\n")
 
