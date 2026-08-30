@@ -27,3 +27,6 @@ HISTORICAL_PARQUET = RAW_DATA_DIR / "ncr_weather_historical.parquet"
 HISTORICAL_CSV = RAW_DATA_DIR / "ncr_weather_historical.csv"
 PRESENT_PARQUET = RAW_DATA_DIR / "ncr_weather_2026_present.parquet"
 PRESENT_CSV = RAW_DATA_DIR / "ncr_weather_2026_present.csv"
+
+SPATIAL_EVAL_INJECTED_PARQUET = SYNTHETIC_DATA_DIR / "spatial_evaluation_injected.parquet"
+SPATIAL_EVAL_INJECTED_CSV = SYNTHETIC_DATA_DIR / "spatial_evaluation_injected.csv"

@@ -346,10 +346,76 @@ def summarize_statistical_alerts(
         .reset_index(drop=True)
     )
 
+def _run_self_test():
+    print("=" * 70)
+    print("STATISTICAL DETECTOR SELF TEST")
+    print("=" * 70)
+    rng = np.random.default_rng(0)
+    timestamps = pd.date_range("2025-01-01", periods=48 * 7, freq="h", tz="UTC")
+    rows = []
+    for station_id in ["A", "B", "C"]:
+        temp = 22 + 6 * np.sin(np.arange(len(timestamps)) / 24.0) + rng.normal(0, 0.8, len(timestamps))
+        humidity = 55 + 10 * np.sin(np.arange(len(timestamps)) / 18.0 + (ord(station_id) / 10)) + rng.normal(0, 2.5, len(timestamps))
+        pressure = 1012 + 2 * np.sin(np.arange(len(timestamps)) / 20.0 + 0.5) + rng.normal(0, 0.6, len(timestamps))
+        rows.append(
+            pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "station_id": station_id,
+                    "temperature": temp,
+                    "humidity": humidity,
+                    "pressure": pressure,
+                }
+            )
+        )
+
+    df = pd.concat(rows, ignore_index=True)
+
+    config = StatisticalConfig(
+        zscore_windows=[6, 24],
+        min_periods=3,
+        zscore_threshold=3.5,
+        roc_percentile=99.0,
+        persistence_window=6,
+    )
+
+    calibration = calibrate_statistical_detector(df, ["temperature", "humidity", "pressure"], config)
+    test_df = df.copy()
+
+    range_mask = (test_df["station_id"] == "A") & (test_df["timestamp"] == timestamps[100])
+    test_df.loc[range_mask, "temperature"] = 80.0
+
+    zscore_mask = (test_df["station_id"] == "B") & (test_df["timestamp"] == timestamps[220])
+    test_df.loc[zscore_mask, "temperature"] = test_df.loc[zscore_mask, "temperature"].values + 20.0
+
+    result = run_statistical_detector(test_df, ["temperature", "humidity", "pressure"], calibration, config)
+
+    range_row = result[(result["station_id"] == "A") & (result["timestamp"] == timestamps[100])]
+    zscore_row = result[(result["station_id"] == "B") & (result["timestamp"] == timestamps[220])]
+
+    checks = {
+        "range anomaly is critical": (
+            not range_row.empty
+            and bool(range_row["evidence_range"].iloc[0])
+            and range_row["statistical_severity_label"].iloc[0] == "critical"
+        ),
+        "zscore anomaly is flagged": (
+            not zscore_row.empty
+            and bool(zscore_row["statistical_alert"].iloc[0])
+        ),
+    }
+
+    print("\nCheck results:")
+    for label, passed in checks.items():
+        print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
+
+    overall = all(checks.values())
+    print("\n" + "=" * 70)
+    print("OVERALL:", "ALL CHECKS PASSED" if overall else "SOME CHECKS FAILED")
+    print("=" * 70)
+
+    return result
+
 
 if __name__ == "__main__":
-    print("Statistical anomaly detector module loaded successfully.")
-    print("\nDetector families: range, rate of change, level, persistence")
-    print("Fusion logic: 0 families = normal, 1 = suspicious, 2+ = anomaly")
-    print("Range anomalies are treated as critical.")
-    print("Persistence anomalies are treated as high-confidence anomalies.")
+    _run_self_test()
