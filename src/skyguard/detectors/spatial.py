@@ -17,8 +17,13 @@ EARTH_RADIUS_KM = 6371.0
 class SpatialConfig:
     k_neighbors: int = 4
     idw_power: float = 2.0
+
     suspicious_percentile: float = 95.0
-    anomaly_percentile: float = 99.0
+    anomaly_percentile: float = 99.5
+
+    humidity_suspicious_percentile: float = 99.0
+    humidity_anomaly_percentile: float = 99.9
+
     min_neighbors_required: int = 2
 
 
@@ -153,10 +158,18 @@ def calibrate_spatial_detector(
             station_valid = station_df.loc[station_df["_count"] >= config.min_neighbors_required, "_residual"]
             if len(station_valid) < 30:
                 continue
+
+            if variable == "humidity":
+                suspicious_percentile = config.humidity_suspicious_percentile
+                anomaly_percentile = config.humidity_anomaly_percentile
+            else:
+                suspicious_percentile = config.suspicious_percentile
+                anomaly_percentile = config.anomaly_percentile
+
             residual_thresholds.setdefault(str(station_id), {})
             residual_thresholds[str(station_id)][variable] = {
-                "p95": float(station_valid.quantile(config.suspicious_percentile / 100)),
-                "p99": float(station_valid.quantile(config.anomaly_percentile / 100)),
+                "p95": float(station_valid.quantile(suspicious_percentile / 100)),
+                "p99": float(station_valid.quantile(anomaly_percentile / 100)),
             }
 
     return SpatialCalibration(neighbors=neighbors, residual_thresholds=residual_thresholds)
@@ -208,12 +221,51 @@ def run_spatial_detector(
         p99_cols.append(anomaly_col)
 
     result["spatial_family_count"] = result[p95_cols].fillna(False).astype(bool).sum(axis=1)
-    p99_count = result[p99_cols].fillna(False).astype(bool).sum(axis=1)
+
+    non_humidity_p95_cols = [
+        col
+        for col, variable in zip(p95_cols, variables)
+        if variable != "humidity"
+    ]
+
+    if non_humidity_p95_cols:
+        non_humidity_p95_count = (
+            result[non_humidity_p95_cols]
+            .fillna(False)
+            .astype(bool)
+            .sum(axis=1)
+        )
+    else:
+        non_humidity_p95_count = pd.Series(
+            0,
+            index=result.index,
+            dtype=int,
+        )
+
+    non_humidity_p99_cols = [
+        col
+        for col, variable in zip(p99_cols, variables)
+        if variable != "humidity"
+    ]
+
+    if non_humidity_p99_cols:
+        non_humidity_p99_count = (
+            result[non_humidity_p99_cols]
+            .fillna(False)
+            .astype(bool)
+            .sum(axis=1)
+        )
+    else:
+        non_humidity_p99_count = pd.Series(
+            0,
+            index=result.index,
+            dtype=int,
+        )
 
     result["spatial_severity_level"] = np.select(
         condlist=[
-            p99_count >= 1,
-            result["spatial_family_count"] >= 1,
+            non_humidity_p99_count >= 1,
+            non_humidity_p95_count >= 1,
         ],
         choicelist=["anomaly", "suspicious"],
         default="normal",
