@@ -55,11 +55,23 @@ Different detectors are good at detecting different types of anomalies. The fina
 
 ## 2. Quick Start
 
+This section describes the recommended path from cloning the repository to running and developing the project.
+
 ### Clone the repository
 
+Clone the repository and switch to the ML engine branch:
+
 ```bash
-git clone <repository-url>
-cd skyguard
+git clone -b dev/ml-engine https://github.com/Root3141/SIH_2026.git
+cd SIH_2026
+```
+
+If you have already cloned the repository:
+
+```bash
+git fetch origin
+git checkout dev/ml-engine
+git pull origin dev/ml-engine
 ```
 
 ### Create and activate a virtual environment
@@ -90,6 +102,31 @@ Alternatively, if using the project configuration:
 pip install -e .
 ```
 
+### Check the data
+
+The project expects raw datasets under:
+
+```text
+data/raw/
+```
+
+Expected files include:
+
+```text
+ncr_weather_historical.parquet
+ncr_weather_2026_present.parquet
+```
+
+CSV versions may also be present.
+
+If the required raw datasets are missing or need to be regenerated, inspect and run:
+
+```text
+src/skyguard/data/fetch_data.py
+```
+
+This module is responsible for fetching and preparing the raw weather datasets used by the project.
+
 ### Verify the project
 
 From the project root, try running:
@@ -100,13 +137,40 @@ python src/skyguard/evaluation/evaluate_spatial.py
 
 This should:
 
-- Load historical and evaluation datasets.
-- Calibrate the spatial detector.
-- Inject synthetic anomalies into evaluation data.
-- Run the detector.
-- Calculate performance metrics.
-- Save results under `results/spatial/`.
+* Load historical and evaluation datasets.
+* Calibrate the spatial detector.
+* Inject synthetic anomalies into evaluation data.
+* Run the detector.
+* Calculate performance metrics.
+* Save results under `results/spatial/`.
 
+You can also run the statistical detector evaluation:
+
+```bash
+python src/skyguard/evaluation/evaluate_statistical.py
+```
+
+Results will be saved under:
+
+```text
+results/statistical/
+```
+
+### Ready to work
+
+Once the evaluation scripts run successfully, the development environment is ready.
+
+The main locations to work with are:
+
+```text
+src/skyguard/detectors/     Detection algorithms
+src/skyguard/evaluation/    Detector evaluation pipelines
+src/skyguard/simulation/    Synthetic anomaly generation
+src/skyguard/data/          Data fetching and preparation
+src/skyguard/config/        Shared configuration and paths
+```
+
+Before modifying or adding a detector, read the sections describing the project architecture, data separation, and recommended detector workflow.
 ---
 
 ## 3. Project Structure
