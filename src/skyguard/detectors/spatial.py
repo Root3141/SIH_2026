@@ -26,6 +26,11 @@ class SpatialConfig:
 
     min_neighbors_required: int = 2
 
+    # Robust neighbor consensus: prevent one corrupted neighbor from
+    # contaminating IDW expectations for otherwise clean stations.
+    robust_neighbor_z_threshold: float = 3.5
+    robust_mad_epsilon: float = 1e-6
+
 
 @dataclass
 class SpatialCalibration:
@@ -75,59 +80,107 @@ def calculate_idw_expected(
     df: pd.DataFrame,
     variable: str,
     neighbors: Dict[str, List[Tuple[str, float]]],
-) -> Tuple[pd.Series, pd.Series]:
+    config: Optional[SpatialConfig] = None,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Calculate robust leave-one-out IDW expectations.
+
+    A station is never used to predict itself (guaranteed by the neighbor map).
+    Before computing the IDW mean, neighbors that are robust spatial outliers
+    relative to the other available neighbors at that timestamp are excluded.
+
+    This prevents a single corrupted station from pulling the expected value of
+    nearby clean stations and propagating false positives.
+    """
+    if config is None:
+        config = SpatialConfig()
+
     pivot = df.pivot_table(index="timestamp", columns="station_id", values=variable)
     station_ids = pivot.columns.tolist()
 
     expected_matrix = pd.DataFrame(index=pivot.index, columns=station_ids, dtype=float)
     count_matrix = pd.DataFrame(index=pivot.index, columns=station_ids, dtype=float)
+    mad_matrix = pd.DataFrame(index=pivot.index, columns=station_ids, dtype=float)
 
     for station_id in station_ids:
         neighbor_list = neighbors.get(station_id, [])
         if not neighbor_list:
             expected_matrix[station_id] = np.nan
             count_matrix[station_id] = 0
+            mad_matrix[station_id] = np.nan
             continue
 
-        neighbor_ids = [n for n, _ in neighbor_list]
-        neighbor_weights = np.array([w for _, w in neighbor_list])
-        available_ids = [n for n in neighbor_ids if n in pivot.columns]
-
-        if not available_ids:
+        neighbor_ids = [n for n, _ in neighbor_list if n in pivot.columns]
+        if not neighbor_ids:
             expected_matrix[station_id] = np.nan
             count_matrix[station_id] = 0
+            mad_matrix[station_id] = np.nan
             continue
 
-        neighbor_values = pivot[available_ids]
-        valid_mask = neighbor_values.notna()
-        count_matrix[station_id] = valid_mask.sum(axis=1)
+        neighbor_values = pivot[neighbor_ids].to_numpy(dtype=float)
+        weight_lookup = dict(neighbor_list)
+        weights = np.array([weight_lookup[n] for n in neighbor_ids], dtype=float)
 
-        weight_lookup = dict(zip(neighbor_ids, neighbor_weights))
-        weights_aligned = np.array([weight_lookup[n] for n in available_ids])
+        expected_values = np.full(len(pivot), np.nan, dtype=float)
+        counts = np.zeros(len(pivot), dtype=int)
+        mads = np.full(len(pivot), np.nan, dtype=float)
 
-        weighted_vals = neighbor_values.fillna(0) * weights_aligned
-        weight_sums = (valid_mask * weights_aligned).sum(axis=1)
+        for i, row in enumerate(neighbor_values):
+            valid = np.isfinite(row)
+            vals = row[valid]
+            w = weights[valid]
 
-        with np.errstate(invalid="ignore", divide="ignore"):
-            expected_matrix[station_id] = weighted_vals.sum(axis=1) / weight_sums.replace(0, np.nan)
+            if len(vals) == 0:
+                continue
+
+            # Robust consensus among neighbors.
+            median = np.median(vals)
+            raw_mad = np.median(np.abs(vals - median))
+            robust_scale = 1.4826 * raw_mad
+            mads[i] = robust_scale
+
+            # If MAD is effectively zero, only exact/near-consensus values are
+            # retained. Otherwise use robust z-score filtering.
+            if len(vals) >= 3:
+                if robust_scale > config.robust_mad_epsilon:
+                    robust_z = np.abs(vals - median) / robust_scale
+                    keep = robust_z <= config.robust_neighbor_z_threshold
+                else:
+                    tolerance = max(config.robust_mad_epsilon, abs(median) * 1e-6)
+                    keep = np.abs(vals - median) <= tolerance
+
+                # Do not collapse to zero neighbors because of numerical edge cases.
+                if keep.sum() == 0:
+                    keep[np.argmin(np.abs(vals - median))] = True
+
+                vals = vals[keep]
+                w = w[keep]
+
+            if len(vals) == 0 or w.sum() <= 0:
+                continue
+
+            expected_values[i] = np.average(vals, weights=w)
+            counts[i] = len(vals)
+
+        expected_matrix[station_id] = expected_values
+        count_matrix[station_id] = counts
+        mad_matrix[station_id] = mads
 
     row_index = pd.MultiIndex.from_arrays([df["timestamp"], df["station_id"]])
 
-    expected_long = expected_matrix.reset_index(names="timestamp").melt(
-        id_vars="timestamp", var_name="station_id", value_name="expected"
-    ).set_index(["timestamp", "station_id"])["expected"]
-    expected = pd.Series(
-        expected_long.reindex(row_index).values, index=df.index, dtype=float
-    )
+    def _to_long(matrix: pd.DataFrame, value_name: str) -> pd.Series:
+        long = (
+            matrix.reset_index(names="timestamp")
+            .melt(id_vars="timestamp", var_name="station_id", value_name=value_name)
+            .set_index(["timestamp", "station_id"])[value_name]
+        )
+        return pd.Series(long.reindex(row_index).values, index=df.index)
 
-    count_long = count_matrix.reset_index(names="timestamp").melt(
-        id_vars="timestamp", var_name="station_id", value_name="count"
-    ).set_index(["timestamp", "station_id"])["count"]
-    neighbor_count = pd.Series(
-        count_long.reindex(row_index).fillna(0).values, index=df.index, dtype=int
-    )
+    expected = _to_long(expected_matrix, "expected").astype(float)
+    neighbor_count = _to_long(count_matrix, "count").fillna(0).astype(int)
+    neighbor_mad = _to_long(mad_matrix, "mad").astype(float)
 
-    return expected, neighbor_count
+    return expected, neighbor_count, neighbor_mad
 
 
 def calibrate_spatial_detector(
@@ -151,7 +204,7 @@ def calibrate_spatial_detector(
 
     residual_thresholds: Dict[str, Dict[str, Dict[str, float]]] = {}
     for variable in variables:
-        expected, neighbor_count = calculate_idw_expected(data, variable, neighbors)
+        expected, neighbor_count, _ = calculate_idw_expected(data, variable, neighbors, config)
         residual = (data[variable] - expected).abs()
 
         for station_id, station_df in data.assign(_residual=residual, _count=neighbor_count).groupby("station_id"):
@@ -197,10 +250,11 @@ def run_spatial_detector(
     p95_cols = []
 
     for variable in variables:
-        expected, neighbor_count = calculate_idw_expected(result, variable, calibration.neighbors)
+        expected, neighbor_count, neighbor_mad = calculate_idw_expected(result, variable, calibration.neighbors, config)
         result[f"{variable}_spatial_expected"] = expected
         result[f"{variable}_spatial_residual"] = result[variable] - expected
         result[f"{variable}_spatial_neighbor_count"] = neighbor_count
+        result[f"{variable}_spatial_neighbor_mad"] = neighbor_mad
 
         p95_thresh = result["station_id"].map(
             lambda sid: calibration.residual_thresholds.get(str(sid), {}).get(variable, {}).get("p95", np.nan)
