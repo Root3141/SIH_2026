@@ -1,124 +1,175 @@
 # SkyGuard Developer Guide
 
-This guide is for anyone joining the SkyGuard project.
+This guide is for developers working on the SkyGuard project.
 
 Its purpose is simple:
 
-> After cloning the repository, you should be able to understand the project structure, know what each major component does, understand the branch workflow, and run the existing pipelines without needing additional explanation.
+> After cloning the repository, you should be able to understand the project architecture, data flow, detector interfaces, evaluation methodology, and current development workflow without needing additional explanation.
 
-SkyGuard is a hackathon project, so this documentation prioritizes practical usability over production-level documentation.
+SkyGuard is a hackathon project, so this documentation prioritizes practical clarity and reproducibility over production-level process.
 
 ---
 
 # 1. What is SkyGuard?
 
-SkyGuard is an intelligent weather station anomaly detection system.
+SkyGuard is a multi-detector weather station anomaly detection system.
 
-The project analyzes weather observations from multiple Automatic Weather Stations (AWS) and attempts to identify faulty, suspicious, or anomalous sensor readings.
+The project analyzes observations from multiple Automatic Weather Stations (AWS) and attempts to identify faulty, suspicious, or anomalous sensor readings.
 
-The system focuses on three primary atmospheric parameters:
+The primary monitored variables are:
 
 * Temperature
 * Atmospheric Pressure
 * Relative Humidity
 
-The project uses multiple complementary detection approaches rather than relying on a single model.
+SkyGuard deliberately uses multiple complementary anomaly detectors rather than relying on a single model.
 
-## Current architecture
+Different anomaly types have different signatures:
 
-```text
-                         Historical Data
-                        (2023 - 2025)
-                              │
-                              ▼
-                        Calibration / Training
-                              │
-              ┌───────────────┼────────────────┐
-              │               │                │
-              ▼               ▼                ▼
-        Statistical      Spatial Detector    Future ML
-         Detector          (IDW-based)       Detectors
-                                               │
-                                               ▼
-                                        Isolation Forest
-                                        and other models
-              │               │                │
-              └───────────────┼────────────────┘
-                              │
-                              ▼
-                         Fusion Layer
-                           (Future)
-                              │
-                              ▼
-                     Final Anomaly Decision
-```
+* A sudden spike may be obvious statistically.
+* A station behaving differently from nearby stations may be spatially anomalous.
+* A subtle temporal pattern may only be visible through sequence modelling.
 
-The main philosophy is:
-
-> Different detectors are good at detecting different types of anomalies. The final system will combine their evidence rather than expecting any individual detector to solve every anomaly detection problem.
+The architecture therefore combines multiple independent sources of evidence.
 
 ---
 
-# 2. Repository Branches and Development Workflow
+# 2. Current System Architecture
 
-The repository currently uses separate branches for major areas of development.
+The current ML architecture consists of three detectors.
+
+```text
+                         Historical Data
+                         (2023–2025)
+                               │
+                               ▼
+                    Calibration / Training
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+        Statistical         Spatial          LSTM Autoencoder
+         Detector          Detector            Detector
+              │                │                │
+              │                │                │
+              └────────────────┼────────────────┘
+                               │
+                               ▼
+                         Fusion Layer
+                         (Next Stage)
+                               │
+                               ▼
+                    Final Anomaly Decision
+```
+
+## Current detector responsibilities
+
+### Statistical detector
+
+Focuses on deviations from expected temporal and historical behaviour.
+
+Useful for:
+
+* Extreme values
+* Sudden deviations
+* Historical range violations
+* Temporal abnormalities
+* Persistence-based behaviour
+
+---
+
+### Spatial detector
+
+Compares a station with neighbouring stations.
+
+Uses spatial interpolation and neighbour consistency.
+
+Useful for:
+
+* Localized station faults
+* Isolated offsets
+* Spatial inconsistencies
+* Station-specific spikes
+
+---
+
+### LSTM Autoencoder
+
+Learns normal multivariate temporal patterns and measures reconstruction error.
+
+Useful for:
+
+* Multivariate temporal anomalies
+* Complex temporal patterns
+* Drift
+* Noise
+* Rate changes
+* Patterns not easily captured by manually designed statistical rules
+
+The LSTM Autoencoder is intended to complement the existing detectors, not replace them.
+
+---
+
+# 3. Repository Branches and Development Workflow
+
+The repository currently uses separate branches for major development areas.
 
 ```text
 main
 │
 ├── dev/ml-engine
-│   └── Detection algorithms, evaluation, simulation, and ML development
+│   └── Detection algorithms, evaluation, simulation, calibration
+│       LSTM Autoencoder and future fusion work
 │
 └── dev/frontend
     └── Streamlit dashboard and frontend development
 ```
 
-## Branch responsibilities
+## `main`
 
-### `main`
+The stable project branch.
 
-The main branch should contain the stable project state.
+Features should be tested before merging.
 
-Major features should be tested before being merged into `main`.
+---
 
-### `dev/ml-engine`
+## `dev/ml-engine`
 
-This branch is used for work related to the anomaly detection engine.
+The primary branch for anomaly detection work.
 
-Typical work includes:
+Typical responsibilities include:
 
 * Statistical anomaly detection
 * Spatial anomaly detection
-* Future ML detectors
-* Isolation Forest
+* LSTM Autoencoder
 * Synthetic anomaly generation
+* Detector calibration
 * Detector evaluation
-* Calibration and training
-* Detection diagnostics
-* Future detector fusion
+* Threshold diagnostics
+* Combined detector evaluation
+* Detector fusion
 
-### `dev/frontend`
+---
 
-This branch is used for frontend development.
+## `dev/frontend`
 
-Currently, it contains the Streamlit frontend prototype.
+Frontend development branch.
 
-Typical frontend work includes:
+Typical responsibilities include:
 
-* Dashboard UI
-* Weather station visualization
+* Streamlit dashboard
 * Alert visualization
+* Weather station visualization
 * Sensor health displays
-* Interactive maps
-* Data presentation
-* User interaction
-* Future backend/API integration
+* Maps
+* Interactive monitoring
+* Future detector output integration
 
-## General development workflow
+---
 
-Developers should generally work on the branch relevant to their component.
+## General workflow
 
-For example:
+Developers should generally work within the branch relevant to their component.
 
 ```text
 ML Developer
@@ -134,34 +185,45 @@ Frontend Developer
 dev/frontend
 ```
 
-The branches can evolve independently while the components are being developed.
+Avoid creating unnecessary branches for very small changes.
 
-Later, once component interfaces and integration requirements are defined, the work can be merged into a common integration branch or directly into `main`.
+Before beginning significant work:
 
-Do not create unnecessary branches for every small change.
+```bash
+git status
+git pull
+```
 
-The current branch structure is intentionally simple.
+Before committing:
+
+```bash
+git status
+git diff
+```
+
+Use descriptive commits.
+
+Examples:
+
+```text
+feat: add LSTM autoencoder detector and evaluator
+feat: add three-detector combined evaluation
+fix: correct LSTM calibration threshold diagnostics
+docs: update developer guide for LSTM detector
+```
 
 ---
 
-# 3. Quick Start
+# 4. Quick Start
 
-This section describes the recommended path from cloning the repository to running and developing the project.
-
-## Clone the repository
-
-Choose the branch relevant to your work.
-
-### ML engine development
-
-Clone the ML engine branch:
+## Clone the ML engine branch
 
 ```bash
 git clone -b dev/ml-engine https://github.com/Root3141/SIH_2026.git
 cd SIH_2026
 ```
 
-If you have already cloned the repository:
+If already cloned:
 
 ```bash
 git fetch origin
@@ -169,64 +231,9 @@ git checkout dev/ml-engine
 git pull origin dev/ml-engine
 ```
 
-### Frontend development
-
-Clone the frontend branch:
-
-```bash
-git clone -b dev/frontend https://github.com/Root3141/SIH_2026.git
-cd SIH_2026
-```
-
-If you have already cloned the repository:
-
-```bash
-git fetch origin
-git checkout dev/frontend
-git pull origin dev/frontend
-```
-
-## Important note about switching branches
-
-Git branches represent different snapshots of the repository.
-
-When switching branches:
-
-```bash
-git switch dev/ml-engine
-```
-
-or:
-
-```bash
-git switch dev/frontend
-```
-
-Git updates the files in your working directory to match the selected branch.
-
-For example, files present only on `dev/frontend` may disappear from your file explorer when switching to `dev/ml-engine`.
-
-They are not deleted.
-
-They simply belong to a different branch snapshot.
-
-Always check your current branch using:
-
-```bash
-git status
-```
-
-or:
-
-```bash
-git branch
-```
-
-The branch marked with `*` is the currently active branch.
-
 ---
 
-## Create and activate a virtual environment
+## Create a virtual environment
 
 Linux/macOS:
 
@@ -242,107 +249,34 @@ python -m venv .venv
 .venv\Scripts\activate
 ```
 
+---
+
 ## Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Alternatively, if using the project configuration:
+Or:
 
 ```bash
 pip install -e .
 ```
 
----
-
-## Check the data
-
-The ML engine expects raw datasets under:
-
-```text
-data/raw/
-```
-
-Expected files include:
-
-```text
-ncr_weather_historical.parquet
-ncr_weather_2026_present.parquet
-```
-
-CSV versions may also be present.
-
-If the required raw datasets are missing or need to be regenerated, inspect and run:
-
-```text
-src/skyguard/data/fetch_data.py
-```
-
-This module is responsible for fetching and preparing the raw weather datasets used by the project.
+The LSTM detector uses PyTorch when available.
 
 ---
 
-## Verify the ML project
+# 5. Project Structure
 
-From the project root, try running:
-
-```bash
-python src/skyguard/evaluation/evaluate_spatial.py
-```
-
-This should:
-
-* Load historical and evaluation datasets.
-* Calibrate the spatial detector.
-* Inject synthetic anomalies into evaluation data.
-* Run the detector.
-* Calculate performance metrics.
-* Save results under `results/spatial/`.
-
-You can also run the statistical detector evaluation:
-
-```bash
-python src/skyguard/evaluation/evaluate_statistical.py
-```
-
-Results will be saved under:
-
-```text
-results/statistical/
-```
-
----
-
-## Ready to work
-
-Once the relevant pipelines run successfully, the development environment is ready.
-
-The main locations to work with are:
-
-```text
-src/skyguard/detectors/     Detection algorithms
-src/skyguard/evaluation/    Detector evaluation pipelines
-src/skyguard/simulation/    Synthetic anomaly generation
-src/skyguard/data/          Data fetching and preparation
-src/skyguard/config/        Shared configuration and paths
-
-frontend/streamlit/         Streamlit frontend prototype
-```
-
-Before modifying or adding a detector, read the sections describing the project architecture, data separation, and recommended detector workflow.
-
----
-
-# 4. Project Structure
-
-The repository currently contains the following major components:
+The important repository structure is approximately:
 
 ```text
 SIH_2026/
 │
 ├── README.md
 ├── DEVELOPER_GUIDE.md
+├── CODEBASE_REFERENCE.md
 ├── requirements.txt
 ├── pyproject.toml
 │
@@ -351,221 +285,46 @@ SIH_2026/
 │   ├── processed/
 │   └── synthetic/
 │
-├── frontend/
-│   └── streamlit/
-│       └── Streamlit dashboard prototype
-│
-├── notebooks/
-│
 ├── results/
 │   ├── statistical/
-│   └── spatial/
+│   ├── spatial/
+│   ├── lstm_autoencoder/
+│   └── statistical_spatial_lstm/
+│
+├── frontend/
+│   └── streamlit/
 │
 └── src/
     └── skyguard/
         ├── config/
         ├── data/
         ├── detectors/
+        │   ├── statistical.py
+        │   ├── spatial.py
+        │   └── lstm_autoencoder.py
+        │
         ├── evaluation/
+        │   ├── evaluate_statistical.py
+        │   ├── evaluate_spatial.py
+        │   ├── evaluate_lstm_autoencoder.py
+        │   └── evaluate_combined.py
+        │
         ├── fusion/
+        │   └── __init__.py
+        │
         └── simulation/
-```
-
-## Important directories
-
-### `data/`
-
-Contains project datasets.
-
-```text
-data/
-│
-├── raw/
-│   ├── ncr_weather_historical.parquet
-│   ├── ncr_weather_historical.csv
-│   ├── ncr_weather_2026_present.parquet
-│   └── ncr_weather_2026_present.csv
-│
-├── processed/
-│
-└── synthetic/
-    └── spatial_evaluation_injected.parquet
+            └── anomaly_injector.py
 ```
 
 ---
 
-### `frontend/`
+# 6. Data Architecture
 
-Contains frontend applications and user interface code.
+SkyGuard currently separates data chronologically.
 
-Currently:
+## Historical calibration data
 
-```text
-frontend/
-└── streamlit/
-```
-
-The Streamlit application currently serves as a frontend prototype for SkyGuard.
-
-It is intended to provide visualization and interaction for:
-
-* Weather station data
-* Anomaly alerts
-* Sensor health
-* Station-level information
-* Geographic visualization
-* Detection results
-* Future real-time monitoring
-
-The frontend is currently developed independently from the ML engine.
-
-Backend and detector integration will be added later.
-
----
-
-### `src/skyguard/detectors/`
-
-Contains anomaly detection algorithms.
-
-Current detectors:
-
-```text
-detectors/
-├── statistical.py
-└── spatial.py
-```
-
-Future detectors should also be added here.
-
-For example:
-
-```text
-detectors/
-├── statistical.py
-├── spatial.py
-└── isolation_forest.py
-```
-
----
-
-### `src/skyguard/evaluation/`
-
-Contains scripts for evaluating detectors.
-
-```text
-evaluation/
-├── evaluate_statistical.py
-└── evaluate_spatial.py
-```
-
-Each detector should ideally have its own evaluation script.
-
-The evaluation pipeline generally follows:
-
-```text
-Historical Data
-      │
-      ▼
-Calibrate / Train Detector
-      │
-      ▼
-Unseen Evaluation Data
-      │
-      ▼
-Inject Synthetic Anomalies
-      │
-      ▼
-Run Detector
-      │
-      ▼
-Compare Predictions with Ground Truth
-      │
-      ▼
-Calculate Metrics
-      │
-      ▼
-Save Results
-```
-
----
-
-### `src/skyguard/simulation/`
-
-Contains tools for generating synthetic anomalies.
-
-Currently:
-
-```text
-simulation/
-└── anomaly_injector.py
-```
-
-This module is used to inject controlled synthetic anomalies into otherwise clean evaluation data.
-
-This is important because real-world anomaly ground truth is limited or unavailable.
-
----
-
-### `src/skyguard/config/`
-
-Contains project-wide configuration.
-
-Currently:
-
-```text
-config/
-└── paths.py
-```
-
-Use this area for shared paths and configuration instead of hardcoding paths throughout the project.
-
----
-
-### `src/skyguard/fusion/`
-
-Reserved for the future detector fusion system.
-
-Currently:
-
-```text
-fusion/
-└── __init__.py
-```
-
-Eventually this will combine evidence from:
-
-* Statistical detector
-* Spatial detector
-* Isolation Forest
-* Other ML models
-
----
-
-### `results/`
-
-Contains outputs generated by detector evaluations.
-
-Results are separated by detector:
-
-```text
-results/
-├── statistical/
-└── spatial/
-```
-
-Generated files should not be treated as source code.
-
-They are evaluation artifacts that can be regenerated by running the corresponding evaluation scripts.
-
----
-
-# 5. Data
-
-The project currently uses two main time periods.
-
-## Historical data
-
-File:
+Location:
 
 ```text
 data/raw/ncr_weather_historical.parquet
@@ -574,64 +333,73 @@ data/raw/ncr_weather_historical.parquet
 Period:
 
 ```text
-2023-01-01 to 2025-12-31
+2023-01-01 through 2025-12-31
 ```
 
 Purpose:
 
-Calibration and training.
+* Detector calibration
+* Threshold estimation
+* Normal behaviour modelling
+* ML training
+* Validation
 
-This dataset is used to establish what normal behavior looks like.
-
-Examples:
-
-* Statistical thresholds
-* Spatial residual distributions
-* Future ML model training
+Historical data must not be mixed with unseen evaluation data during calibration.
 
 ---
 
 ## Unseen evaluation data
 
-File:
+Location:
 
 ```text
 data/raw/ncr_weather_2026_present.parquet
 ```
 
-Period:
+Current period:
 
 ```text
-2026-01-01 to present
+2026-01-01 onward
 ```
 
 Purpose:
 
-Detector evaluation.
-
-This data should remain separate from historical calibration data.
+* Unseen detector evaluation
+* Synthetic anomaly injection
+* Benchmark experiments
 
 The intended workflow is:
 
 ```text
 Historical Data
       │
-      └──► Calibration / Training
-
-
-2026 Evaluation Data
+      ▼
+Calibration / Training
       │
-      └──► Synthetic Anomaly Injection
-                  │
-                  ▼
-             Detector Evaluation
+      │
+      └───────────────┐
+                      │
+                      ▼
+              Frozen Detector State
+
+
+Unseen Evaluation Data
+      │
+      ▼
+Synthetic Anomaly Injection
+      │
+      ▼
+Run Frozen Detector
+      │
+      ▼
+Evaluate Predictions
 ```
 
-This separation helps prevent evaluation leakage.
+This separation is important for preventing evaluation leakage.
 
 ---
 
-# 6. Synthetic Anomaly Injection
+# 7. Synthetic Anomaly Injection
 
 Location:
 
@@ -639,9 +407,9 @@ Location:
 src/skyguard/simulation/anomaly_injector.py
 ```
 
-The anomaly injector creates controlled faults in clean weather data.
+The anomaly injector creates controlled synthetic sensor faults.
 
-It is used primarily for evaluating whether detectors can detect known anomalies.
+This allows the project to evaluate detectors against known ground truth.
 
 Typical usage:
 
@@ -660,54 +428,241 @@ corrupted_df, injection_log = inject_anomalies(
 )
 ```
 
-The injector returns:
-
-* `corrupted_df`: the original dataset with synthetic anomalies injected
-* `injection_log`: a record of anomaly events that were created
+---
 
 ## Supported anomaly types
 
-Currently the injector supports:
-
-| Anomaly     | Description                       |
-| ----------- | --------------------------------- |
-| spike       | Sudden extreme deviation          |
-| offset      | Sustained shift from normal value |
-| drift       | Gradual movement away from normal |
-| stuck       | Sensor value becomes constant     |
-| rate_change | Abnormally rapid change/ramp      |
-| noise       | Increased random variation        |
-| dropout     | Missing/invalid readings          |
+| Anomaly Type | Description                         |
+| ------------ | ----------------------------------- |
+| spike        | Sudden extreme deviation            |
+| offset       | Sustained shift from expected value |
+| drift        | Gradual movement away from normal   |
+| stuck        | Sensor becomes constant             |
+| rate_change  | Abnormally rapid temporal change    |
+| noise        | Increased random variation          |
+| dropout      | Missing or invalid readings         |
 
 Not every detector is expected to detect every anomaly type equally well.
 
-Examples:
-
-* Spatial detection should be useful for isolated offsets.
-* Temporal/statistical methods may be better for stuck sensors.
-* Missing-value checks are naturally better suited to dropouts.
-
 This is intentional.
-
-The project uses multiple complementary detectors.
-
-## Ground truth
-
-Injected anomalies include metadata that allows predictions to be compared with known ground truth.
-
-Evaluation scripts may map injector metadata to standard columns such as:
-
-* `is_anomaly`
-* `anomaly_id`
-* `anomaly_type`
-* `anomaly_variable`
-* `anomaly_severity`
-
-These columns are used during evaluation.
 
 ---
 
-# 7. Statistical Detector
+## Important note about dropout
+
+Dropout is fundamentally different from value-based anomalies.
+
+A missing or invalid reading may not be suitable for reconstruction-based or normal numerical anomaly scoring.
+
+Therefore:
+
+> Detector comparisons should not be judged harshly for poor dropout detection unless explicit missing-data detection logic is part of that detector.
+
+Dropout should eventually be handled by dedicated data-quality or missing-value logic.
+
+---
+
+# 8. Evaluation Philosophy
+
+The project evaluates detectors using a controlled synthetic benchmark.
+
+The standard process is:
+
+```text
+                 Historical Dataset
+                        │
+                        ▼
+                 Calibrate Detector
+                        │
+                        ▼
+              Freeze Calibration State
+                        │
+                        ▼
+              Unseen Evaluation Dataset
+                        │
+                        ▼
+              Inject Known Anomalies
+                        │
+                        ▼
+                Run Detector Once
+                        │
+                        ▼
+              Compare with Ground Truth
+                        │
+                        ▼
+              Calculate Performance
+```
+
+Synthetic labels are used for evaluation only.
+
+They must not be used to:
+
+* Train the detector
+* Recalibrate thresholds
+* Tune the detector during normal inference
+
+They may be used for offline experiments and threshold analysis.
+
+---
+
+# 9. Observation-Level Metrics
+
+Each row is evaluated independently.
+
+Definitions:
+
+### True Positive
+
+An anomalous observation was correctly flagged.
+
+### False Positive
+
+A clean observation was incorrectly flagged.
+
+### False Negative
+
+An anomalous observation was missed.
+
+### True Negative
+
+A clean observation was correctly left unflagged.
+
+---
+
+## Precision
+
+```text
+TP
+─────────
+TP + FP
+```
+
+Of everything flagged, how much was actually anomalous?
+
+---
+
+## Recall
+
+```text
+TP
+─────────
+TP + FN
+```
+
+Of all anomalies, how many were detected?
+
+---
+
+## F1 Score
+
+```text
+2 × Precision × Recall
+──────────────────────
+   Precision + Recall
+```
+
+Balances precision and recall.
+
+---
+
+## False Positive Rate
+
+```text
+FP
+─────────
+FP + TN
+```
+
+Operationally, this is important because excessive false positives cause alert fatigue.
+
+---
+
+# 10. Event-Level Evaluation
+
+Many anomalies span multiple observations.
+
+Example:
+
+```text
+Hour 1 → anomaly
+Hour 2 → anomaly
+Hour 3 → anomaly
+Hour 4 → anomaly
+```
+
+Observation-level evaluation asks:
+
+> How many anomalous rows were detected?
+
+Event-level evaluation asks:
+
+> Was the anomaly event detected at least once?
+
+For an event:
+
+```text
+Detected if:
+
+at least one anomalous observation
+within the event is flagged
+```
+
+Event-level recall is:
+
+```text
+Detected Events
+────────────────────
+Total Anomaly Events
+```
+
+Event-level evaluation is particularly useful for operational anomaly detection.
+
+Catching one point in a meaningful anomaly event may be enough to trigger investigation.
+
+---
+
+# 11. Window Overlap Contamination
+
+Window-based detectors require additional care during evaluation.
+
+The LSTM Autoencoder uses overlapping temporal windows.
+
+An anomaly can therefore influence reconstruction scores of nearby observations.
+
+For a window of length 24:
+
+```text
+        ┌────── 24-hour window ──────┐
+        │                             │
+normal normal anomaly anomaly normal normal
+        │                             │
+        └──── overlapping windows ────┘
+```
+
+A clean row close to an anomaly may receive a higher reconstruction error because it belongs to windows containing anomalous observations.
+
+Therefore, clean observations are separated into:
+
+### Near-anomaly clean rows
+
+Clean observations close enough to anomalies to potentially share windows.
+
+### Buffer-clear clean rows
+
+Clean observations sufficiently far from anomalies.
+
+For the LSTM:
+
+```text
+window size = 24
+overlap buffer = ±23 observations
+```
+
+Buffer-clear rows provide a cleaner estimate of intrinsic false-positive behaviour.
+
+---
+
+# 12. Statistical Detector
 
 Location:
 
@@ -715,16 +670,17 @@ Location:
 src/skyguard/detectors/statistical.py
 ```
 
-The statistical detector identifies observations that are unusual based on historical and temporal behavior.
+The statistical detector identifies observations that are unusual relative to expected temporal and historical behaviour.
 
-It is primarily intended to detect:
+Typical signals include:
 
-* Extreme values
-* Sudden changes
-* Temporal deviations
-* Other statistically unusual behavior
+* Range violations
+* Rate-of-change anomalies
+* Z-score deviations
+* Persistence signals
+* Historical deviations
 
-The statistical detector should be evaluated using:
+Run evaluation:
 
 ```bash
 python src/skyguard/evaluation/evaluate_statistical.py
@@ -736,21 +692,11 @@ Results are saved under:
 results/statistical/
 ```
 
-Current outputs include files such as:
-
-* `alerts.csv`
-* `alert_summary.csv`
-* `station_statistics.csv`
-* `variable_involvement.csv`
-* `evidence_combinations.csv`
-* `full_results.parquet`
-* `detector_evaluation.png`
-
-The exact outputs may evolve as the evaluation pipeline is improved.
+The statistical detector is generally strong for obvious rule-based and temporal deviations.
 
 ---
 
-# 8. Spatial Detector
+# 13. Spatial Detector
 
 Location:
 
@@ -758,84 +704,45 @@ Location:
 src/skyguard/detectors/spatial.py
 ```
 
-The spatial detector compares each station's observation with an expected value estimated from nearby stations.
-
-It uses spatial relationships between stations rather than only looking at the station's historical behavior.
+The spatial detector compares station observations with nearby stations.
 
 Conceptually:
 
 ```text
-Station A
-Observed value: 35°C
+Station A observation: 35°C
 
 Nearby stations:
 B: 22°C
 C: 23°C
 D: 21°C
 
-Spatial expectation ≈ 22°C
+Expected spatial value ≈ 22°C
 
 Residual:
 
 35 - 22 = 13°C
 
-Large residual → potentially anomalous
+Large residual → possible anomaly
 ```
 
-The expected value is calculated using Inverse Distance Weighting (IDW).
+The detector uses spatial relationships and Inverse Distance Weighting (IDW).
 
-Current configuration testing settled on:
+Current evaluated configuration includes:
 
-* IDW power: `2.0`
-* Anomaly threshold: approximately `P99.5` calibration threshold
+```text
+k neighbors:          4
+IDW power:            2.0
+suspicious percentile: 95
+anomaly percentile:    99.5
+```
 
-These settings should not be changed casually without evaluating the effect.
-
-## Spatial detector strengths
-
-The spatial detector is particularly useful for identifying:
-
-* Isolated sensor offsets
-* Localized spikes
-* A station behaving inconsistently with nearby stations
-* Spatially isolated faults
-
-## Spatial detector limitations
-
-The spatial detector is not expected to be the best detector for:
-
-* Dropouts
-* Stuck sensors
-* Slow temporal drift
-* Some gradual rate changes
-* Region-wide weather events
-
-For example, if every station experiences the same genuine weather event, that should generally not be classified as an anomaly.
-
-The spatial detector includes evaluation for this behavior through a regional event sanity test.
-
-## Run spatial evaluation
-
-From the project root:
+Run evaluation:
 
 ```bash
 python src/skyguard/evaluation/evaluate_spatial.py
 ```
 
-The script performs:
-
-1. Load historical data
-2. Load unseen evaluation data
-3. Calibrate spatial detector
-4. Inject synthetic anomalies
-5. Run spatial detector
-6. Calculate observation-level metrics
-7. Calculate event-level metrics
-8. Analyze false positives
-9. Run regional event sanity test
-10. Save results
-
-Results are saved to:
+Results:
 
 ```text
 results/spatial/
@@ -843,702 +750,1074 @@ results/spatial/
 
 ---
 
-# 9. Understanding Evaluation
+# 14. LSTM Autoencoder Detector
 
-The project evaluates detectors against synthetic anomalies because the exact ground truth of real-world anomalies is generally unavailable.
-
-The standard evaluation workflow is:
+Location:
 
 ```text
-                  Historical Dataset
-                         │
-                         ▼
-                  Calibrate Detector
-                         │
-                         ▼
-                Unseen Clean Dataset
-                         │
-                         ▼
-               Inject Known Anomalies
-                         │
-                         ▼
-                  Corrupted Dataset
-                         │
-                         ▼
-                   Run Detector
-                         │
-                         ▼
-            Compare with Ground Truth
-                         │
-                         ▼
-                  Performance Metrics
+src/skyguard/detectors/lstm_autoencoder.py
 ```
 
-## Observation-level metrics
+The LSTM Autoencoder is SkyGuard's deep temporal anomaly detector.
 
-Each individual row or observation is evaluated.
+Its purpose is to learn normal multivariate temporal behaviour across:
 
-Important metrics:
+* Temperature
+* Pressure
+* Humidity
 
-* True Positive: an anomaly was injected and detected
-* False Positive: the detector flagged an observation that was not injected as anomalous
-* False Negative: an anomaly was injected but not detected
-* True Negative: a normal observation was correctly left unflagged
+Rather than manually specifying every possible anomaly pattern, the model learns to reconstruct normal sequences.
 
-### Precision
-
-```text
-TP / (TP + FP)
-```
-
-Of everything flagged by the detector, how much was actually anomalous?
-
-### Recall
-
-```text
-TP / (TP + FN)
-```
-
-Of all injected anomalies, how many were detected?
-
-### F1 Score
-
-```text
-2 × Precision × Recall
-─────────────────────
-   Precision + Recall
-```
-
-Balances precision and recall.
-
-## Event-level metrics
-
-An anomaly event may span multiple observations.
-
-For example:
-
-```text
-Hour 1 → anomaly
-Hour 2 → anomaly
-Hour 3 → anomaly
-Hour 4 → anomaly
-```
-
-Instead of requiring every observation to be detected, event-level evaluation asks:
-
-> Was this anomaly event detected at least once?
-
-This is useful because operationally detecting an anomaly event may matter more than flagging every individual affected row.
+Unusual sequences should produce larger reconstruction errors.
 
 ---
 
-# 10. Spatial Evaluation Results
+## Core concept
 
-Running:
+Training:
+
+```text
+Normal Time-Series Windows
+          │
+          ▼
+      LSTM Encoder
+          │
+          ▼
+      Latent State
+          │
+          ▼
+      LSTM Decoder
+          │
+          ▼
+Reconstructed Window
+```
+
+Anomaly score:
+
+```text
+Original Window
+       -
+Reconstructed Window
+       │
+       ▼
+Reconstruction Error
+```
+
+Higher reconstruction error indicates greater deviation from learned normal behaviour.
+
+---
+
+## Key design decisions
+
+The implementation follows several important constraints.
+
+### Station boundaries are respected
+
+Windows are constructed independently for each station.
+
+The detector does not create windows that mix:
+
+```text
+Station A → Station B
+```
+
+---
+
+### Large gaps are not bridged
+
+Temporal windows should not cross discontinuous periods.
+
+---
+
+### Chronological separation
+
+The LSTM follows a chronological workflow:
+
+```text
+Historical Data
+      │
+      ▼
+Training Slice
+      │
+      ▼
+Train Model
+      │
+      ▼
+Validation Slice
+      │
+      ▼
+Calibrate Thresholds
+```
+
+The unseen 2026 evaluation data is not used to train the model.
+
+---
+
+### Multivariate modelling
+
+The model sees all primary variables together:
+
+```text
+temperature
+pressure
+humidity
+```
+
+This allows the detector to learn relationships between variables.
+
+---
+
+### Observation-level scoring
+
+The model reconstructs temporal windows, but SkyGuard evaluates observations.
+
+Overlapping window reconstruction errors are therefore aggregated back into observation-level scores.
+
+This allows the LSTM detector to integrate with the same evaluation framework as the other detectors.
+
+---
+
+# 15. LSTM Calibration and Cached State
+
+The LSTM evaluator supports caching.
+
+Primary artifacts:
+
+```text
+results/lstm_autoencoder/
+├── calibration.pkl
+└── scored_evaluation.parquet
+```
+
+---
+
+## `calibration.pkl`
+
+Contains the frozen detector state.
+
+This includes:
+
+* Trained model
+* Normalization state
+* Configuration
+* Calibration thresholds
+* Relevant calibration metadata
+
+The calibration state should be reused when evaluating the same trained model.
+
+---
+
+## `scored_evaluation.parquet`
+
+Contains evaluation data after LSTM inference.
+
+This allows diagnostics such as:
+
+* Threshold sweeps
+* Score distributions
+* Buffer analysis
+* False-positive analysis
+
+without retraining the model.
+
+---
+
+# 16. LSTM Evaluator Modes
+
+Location:
+
+```text
+src/skyguard/evaluation/evaluate_lstm_autoencoder.py
+```
+
+The evaluator supports three modes.
+
+---
+
+## Full mode
 
 ```bash
-python src/skyguard/evaluation/evaluate_spatial.py
+python src/skyguard/evaluation/evaluate_lstm_autoencoder.py --mode full
 ```
 
-produces files such as:
-
-| File                              | Purpose                                         |
-| --------------------------------- | ----------------------------------------------- |
-| `observation_metrics.csv`         | Overall precision, recall, F1, etc.             |
-| `event_metrics.csv`               | Event-level detection performance               |
-| `performance_by_anomaly_type.csv` | Performance for each anomaly type               |
-| `performance_by_variable.csv`     | Performance for temperature, humidity, pressure |
-| `false_positive_analysis.csv`     | False positive breakdown                        |
-| `severity_distribution.csv`       | Spatial severity distribution                   |
-| `regional_event_test.csv`         | Regional weather event sanity test              |
-| `injection_log.csv`               | Synthetic anomaly events injected               |
-| `anomaly_predictions.csv`         | Detector predictions                            |
-| `full_results.parquet`            | Complete evaluation dataset                     |
-| `spatial_detector_evaluation.png` | Evaluation visualization                        |
-
-The injected dataset may also be saved under:
+Workflow:
 
 ```text
-data/synthetic/
-```
-
----
-
-# 11. Recommended Workflow When Working on a Detector
-
-When modifying an existing detector or adding a new one, use this workflow.
-
-## Step 1: Understand the detector's purpose
-
-Do not expect every detector to identify every anomaly.
-
-Ask:
-
-> What type of anomaly signal is this detector specifically designed to detect?
-
-Examples:
-
-| Detector         | Primary signal                         |
-| ---------------- | -------------------------------------- |
-| Statistical      | Temporal/statistical deviation         |
-| Spatial          | Disagreement with neighboring stations |
-| Isolation Forest | Multivariate unusual patterns          |
-
----
-
-## Step 2: Calibrate or train using historical data
-
-Use:
-
-```text
-2023–2025 historical data
-```
-
-Avoid using the unseen evaluation period for fitting thresholds or training models.
-
----
-
-## Step 3: Evaluate on unseen data
-
-Use:
-
-```text
-2026-present data
-```
-
-Inject synthetic anomalies using:
-
-```text
-src/skyguard/simulation/anomaly_injector.py
-```
-
----
-
-## Step 4: Evaluate performance
-
-At minimum, inspect:
-
-* Precision
-* Recall
-* F1 score
-* False positive rate
-* Performance by anomaly type
-* Performance by variable
-* Event-level recall
-
-Do not optimize only one metric.
-
-For example, reducing false positives by making thresholds extremely strict may destroy recall.
-
----
-
-## Step 5: Test meaningful configuration changes
-
-Avoid random parameter tuning.
-
-Make a hypothesis first.
-
-Example:
-
-> Hypothesis: the anomaly threshold is too sensitive.
-
-Change:
-
-```text
-P99 → P99.5
-```
-
-Measure:
-
-* False positives
-* Precision
-* Recall
-* Event-level recall
-
-Keep changes that provide a meaningful tradeoff.
-
----
-
-# 12. Adding a New Detector
-
-New detectors should generally follow this structure.
-
-## Create the detector
-
-Add:
-
-```text
-src/skyguard/detectors/<detector_name>.py
-```
-
-The detector should ideally contain:
-
-* Configuration
-* Calibration / Training
-* Detection
-* Output formatting
-* Self-test
-
-## Create an evaluation script
-
-Add:
-
-```text
-src/skyguard/evaluation/evaluate_<detector_name>.py
-```
-
-The evaluation script should follow the existing pattern:
-
-```text
-Load historical data
-      │
-      ▼
-Train / Calibrate
-      │
-      ▼
-Load evaluation data
-      │
-      ▼
-Inject synthetic anomalies
-      │
-      ▼
-Run detector
-      │
-      ▼
-Evaluate predictions
-      │
-      ▼
-Save results
-```
-
-Results should preferably go to:
-
-```text
-results/<detector_name>/
-```
-
-## Keep output conventions consistent
-
-Where practical, detectors should produce compatible concepts:
-
-* `alert`
-* `severity`
-* detector-specific evidence
-
-Evaluation data should use standard ground truth concepts:
-
-* `is_anomaly`
-* `anomaly_id`
-* `anomaly_type`
-* `anomaly_variable`
-* `anomaly_severity`
-
-Consistent outputs will make the future fusion layer much easier to implement.
-
----
-
-# 13. Frontend Development
-
-The frontend is currently developed as a separate component on the `dev/frontend` branch.
-
-Current location:
-
-```text
-frontend/streamlit/
-```
-
-The frontend currently serves as a Streamlit dashboard prototype.
-
-Its purpose is to provide a user-facing interface for visualizing SkyGuard's anomaly detection system.
-
-The frontend may include functionality such as:
-
-* Weather station visualization
-* Geographic maps
-* Station-level data views
-* Sensor readings
-* Anomaly alerts
-* Severity indicators
-* Sensor health information
-* Historical observations
-* Real-time data visualization
-
-## Current frontend status
-
-The frontend is currently a prototype.
-
-It is not yet fully integrated with the anomaly detection engine.
-
-This means that frontend logic may currently use:
-
-* Simulated data
-* Placeholder detection logic
-* Mock alerts
-* Prototype data flows
-
-These should eventually be replaced with outputs from the actual detection engine.
-
-## Future frontend integration
-
-The intended long-term architecture may look approximately like:
-
-```text
-Weather Station Data
+Load Historical Data
         │
         ▼
-Data Processing
+Train / Calibrate LSTM
         │
         ▼
-Detection Engine
- ┌──────┼────────┐
- │      │        │
- ▼      ▼        ▼
-Stat   Spatial   ML
- │      │        │
- └──────┼────────┘
+Save calibration.pkl
         │
         ▼
-    Fusion Layer
+Inject anomalies
         │
         ▼
- Final Anomaly Decision
+Run inference
         │
         ▼
- Backend / API Layer
+Evaluate
         │
         ▼
- Streamlit Dashboard
+Save scored results
 ```
 
-This architecture is conceptual.
-
-The backend/API and frontend integration layers have not yet been finalized.
-
-Avoid tightly coupling frontend prototype logic directly to individual detector implementations until integration interfaces are defined.
+Use this after significant model changes.
 
 ---
 
-# 14. Important Project Principles
+## Score mode
 
-## Detectors are complementary
+```bash
+python src/skyguard/evaluation/evaluate_lstm_autoencoder.py --mode score
+```
 
-Do not judge every detector solely by whether it detects every anomaly type.
-
-Examples:
-
-* A spatial detector should not necessarily be expected to detect a dropout.
-* A temporal detector may miss a spatially isolated offset.
-* An ML detector may detect complex patterns missed by simple rules.
-
-The final system is intended to combine multiple sources of evidence.
-
----
-
-## Avoid data leakage
-
-Keep calibration/training data separate from evaluation data.
-
-Current intended split:
+Workflow:
 
 ```text
-Historical:
-2023–2025
-→ Calibration / Training
-
-
-Evaluation:
-2026-present
-→ Testing
+Load Existing calibration.pkl
+        │
+        ▼
+Inject Fresh Evaluation Anomalies
+        │
+        ▼
+Run LSTM Inference
+        │
+        ▼
+Evaluate
 ```
 
-Synthetic anomalies provide ground truth.
+Important:
 
-Real anomaly labels are limited.
+> Score mode does not retrain the LSTM.
 
-The anomaly injector provides controlled anomalies with known:
-
-* Type
-* Location
-* Variable
-* Severity
-* Event identity
-
-This allows objective evaluation.
+It reuses the stored calibration and trained weights.
 
 ---
 
-## Don't overfit to synthetic evaluation
+## Analyze mode
 
-Synthetic anomalies are useful for benchmarking, but they are still simulated.
+```bash
+python src/skyguard/evaluation/evaluate_lstm_autoencoder.py --mode analyze
+```
 
-Avoid tuning a detector excessively to one exact injection configuration.
-
-When changing detector logic, consider whether the improvement represents:
-
-* A genuinely better detection method
-
-or merely:
-
-* Better alignment with the current synthetic anomaly configuration
-
----
-
-## Keep components modular
-
-The project contains multiple major components:
-
-* Data collection
-* Data processing
-* Statistical detection
-* Spatial detection
-* Future ML detection
-* Synthetic anomaly generation
-* Evaluation
-* Detector fusion
-* Frontend visualization
-
-Avoid tightly coupling these components unnecessarily.
-
-Well-defined interfaces will make future integration significantly easier.
-
----
-
-# 15. Current Project Status
-
-Currently implemented:
-
-* ✅ Data collection and validation
-* ✅ Historical/evaluation data separation
-* ✅ Statistical detector
-* ✅ Spatial detector
-* ✅ Synthetic anomaly injector
-* ✅ Spatial detector evaluation pipeline
-* ✅ Spatial detector diagnostics
-* ✅ Regional event sanity testing
-* ✅ Streamlit frontend prototype
-
-Current ML detector architecture:
+Workflow:
 
 ```text
-                    ┌─────────────────┐
-                    │  Weather Data   │
-                    └────────┬────────┘
-                             │
-                 ┌───────────┴───────────┐
-                 │                       │
-                 ▼                       ▼
-         Statistical Detector     Spatial Detector
-                 │                       │
-                 └───────────┬───────────┘
-                             │
-                             ▼
-                        Future Fusion
+Load calibration.pkl
+        │
+        ▼
+Load scored_evaluation.parquet
+        │
+        ▼
+Run Diagnostics
 ```
 
-Current frontend architecture is developed separately:
+No retraining.
 
-```text
-Frontend Prototype
-       │
-       ▼
-Streamlit Dashboard
-       │
-       ▼
-Visualization / UI
-```
+No LSTM inference.
 
-The frontend and ML engine are not yet fully integrated.
+This mode is useful for cheap analysis experiments.
 
 ---
 
-# 16. What's Next?
+# 17. LSTM Thresholds
 
-The next major ML component is:
+The LSTM calibration currently produces percentile-based thresholds.
+
+Important values include:
 
 ```text
-Isolation Forest
+Calibration P95
+Calibration P99
 ```
 
-The Isolation Forest model will add a multivariate anomaly detection approach.
-
-Unlike the current detectors:
-
-* Statistical detection focuses on statistical/temporal deviations.
-* Spatial detection focuses on disagreement with neighboring stations.
-* Isolation Forest can identify unusual combinations and multivariate patterns.
-
-The intended workflow will be:
-
-1. Decide features
-2. Train on historical normal behavior
-3. Run on unseen 2026 data
-4. Evaluate using synthetic anomaly injection
-5. Compare performance with existing detectors
-6. Save results under `results/isolation_forest/`
-
-After additional detectors are implemented, the next major task will be:
-
-## Detector Fusion
-
-The fusion layer will combine evidence from multiple detectors.
+The detector currently uses the calibrated P99 threshold for confirmed alerts.
 
 Conceptually:
 
 ```text
-Statistical Alert ──────┐
-                        │
-Spatial Alert ──────────┼──► Fusion ──► Final Decision
-                        │
-Isolation Forest ───────┤
-                        │
-Future Detectors ───────┘
+score >= P95
+        │
+        ▼
+Suspicious
+
+score >= P99
+        │
+        ▼
+Confirmed anomaly
 ```
 
-The goal is to produce a more reliable final anomaly decision than any individual detector alone.
+The threshold should remain a calibration-derived quantity.
+
+Evaluation data may be used to study threshold tradeoffs, but evaluation-derived thresholds should not silently replace production calibration thresholds.
 
 ---
 
-## Integration
+# 18. LSTM Diagnostic Findings
 
-Once the detection components and frontend reach sufficient maturity, integration work can begin.
+The LSTM evaluation showed strong event-level performance for several anomaly types.
 
-Likely integration tasks include:
+The detector was particularly effective for:
 
-1. Define standard detector output formats.
-2. Implement detector fusion.
-3. Define a common anomaly result schema.
-4. Create interfaces between the ML engine and frontend.
-5. Replace simulated frontend data with real detector outputs.
-6. Connect real-time or streaming weather observations.
-7. Test the complete end-to-end pipeline.
+* Drift
+* Noise
+* Rate change
+* Spikes
+* Many offsets
 
-At that stage, an integration branch may be useful.
+It was weaker for:
+
+* Stuck anomalies
+* Dropouts
+
+Dropout should not currently be treated as a primary LSTM performance target because missing-data detection is a separate problem.
+
+Threshold increases reduce false positives but primarily begin sacrificing:
+
+* Stuck detection
+* Some offsets
+* Some drift events
+
+The detector therefore currently remains unchanged pending fusion experiments.
+
+---
+
+# 19. Why the LSTM Is Not Being Further Tuned Yet
+
+The LSTM has reached a useful stage where further isolated tuning has diminishing returns.
+
+Combined evaluation showed that the LSTM contributes complementary detections, particularly events missed by the existing statistical and spatial detectors.
+
+However, it also produces additional false positives when used independently.
+
+Therefore, the next optimisation problem is no longer:
+
+> How do we make the LSTM perfect by itself?
+
+It is:
+
+> How do we combine complementary detector evidence intelligently?
+
+This is the responsibility of the upcoming fusion layer.
+
+The LSTM should currently be treated as a frozen detector baseline.
+
+Do not casually retrain or change thresholds before fusion experiments establish whether such changes improve the final system.
+
+---
+
+# 20. Combined Three-Detector Evaluation
+
+Location:
+
+```text
+src/skyguard/evaluation/evaluate_combined.py
+```
+
+The combined evaluator runs:
+
+* Statistical detector
+* Spatial detector
+* LSTM Autoencoder
+
+against the same synthetic benchmark.
+
+This is critical.
+
+Detector comparisons are only meaningful when they use:
+
+```text
+Same evaluation dataset
+Same injected anomalies
+Same anomaly seed
+Same ground truth
+```
+
+---
+
+## Combined evaluation principle
+
+```text
+                    Shared Synthetic Benchmark
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+        Statistical          Spatial            LSTM
+              │                │                │
+              └────────────────┼────────────────┘
+                               │
+                               ▼
+                       Fusion Experiments
+```
+
+The combined evaluator does not retrain the LSTM.
+
+It loads the existing frozen calibration state.
+
+---
+
+# 21. Fusion Baselines
+
+The combined evaluator currently tests simple logical combinations.
+
+Examples:
+
+### Statistical + Spatial
+
+```text
+statistical OR spatial
+```
+
+### Statistical + LSTM
+
+```text
+statistical OR LSTM
+```
+
+### Spatial + LSTM
+
+```text
+spatial OR LSTM
+```
+
+### All detectors
+
+```text
+statistical OR spatial OR LSTM
+```
+
+---
+
+## Any two of three
+
+```text
+statistical + spatial + LSTM
+
+Alert if at least two agree
+```
+
+Conceptually:
+
+```text
+S + P = alert
+S + L = alert
+P + L = alert
+```
+
+This often provides a useful precision-oriented baseline.
+
+---
+
+## All three
+
+```text
+statistical AND spatial AND LSTM
+```
+
+This is extremely conservative.
+
+It is expected to produce:
+
+* High precision
+* Very low false-positive rates
+* Lower recall
+
+---
+
+# 22. LSTM Complementarity
+
+The purpose of adding the LSTM is not necessarily to beat every existing detector individually.
+
+The important question is:
+
+> Does the LSTM detect meaningful anomalies that the other detectors miss?
+
+This is measured through complementarity analysis.
 
 For example:
 
 ```text
-main
-│
-├── dev/ml-engine
-│
-├── dev/frontend
-│
-└── dev/integration
+Baseline detectors detect:
+117 events
+
+Adding LSTM detects:
+124 events
+
+New events recovered by LSTM:
+7
 ```
 
-However, there is no need to create the integration branch before integration work actually begins.
+This indicates that the LSTM contributes unique information.
+
+However, complementarity must always be considered alongside false-positive cost.
+
+A detector that recovers a few events but introduces thousands of unique false positives should not automatically be OR-combined without further fusion logic.
 
 ---
 
-# 17. Quick Command Reference
+# 23. Current Detector Status
 
-From the project root:
+## Statistical Detector
 
-## Check current branch
-
-```bash
-git status
-```
-
-or:
-
-```bash
-git branch
-```
-
-## Switch to ML development
-
-```bash
-git switch dev/ml-engine
-```
-
-## Switch to frontend development
-
-```bash
-git switch dev/frontend
-```
-
-## Update current branch
-
-```bash
-git pull
-```
-
-## Fetch all remote branch information
-
-```bash
-git fetch origin
-```
-
----
-
-## Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-## Run spatial evaluation
-
-```bash
-python src/skyguard/evaluation/evaluate_spatial.py
-```
-
-## Run statistical evaluation
-
-```bash
-python src/skyguard/evaluation/evaluate_statistical.py
-```
-
-## Important source locations
-
-* Statistical detector: `src/skyguard/detectors/statistical.py`
-* Spatial detector: `src/skyguard/detectors/spatial.py`
-* Anomaly injector: `src/skyguard/simulation/anomaly_injector.py`
-* Spatial evaluation: `src/skyguard/evaluation/evaluate_spatial.py`
-* Statistical evaluation: `src/skyguard/evaluation/evaluate_statistical.py`
-* Project paths: `src/skyguard/config/paths.py`
-* Frontend prototype: `frontend/streamlit/`
-
----
-
-# 18. Final Note
-
-This project is evolving quickly.
-
-When adding a major component:
-
-* Keep the existing project structure consistent.
-* Reuse the anomaly injection system for detector evaluation.
-* Keep calibration/training separate from evaluation.
-* Save outputs under `results/<detector_name>/`.
-* Add a basic self-test where practical.
-* Document important design decisions.
-* Avoid optimizing a detector in isolation when the final system will use detector fusion.
-* Keep frontend and detection logic modular until integration interfaces are defined.
-* Avoid unnecessary Git branches.
-* Keep branch responsibilities clear.
-
-The goal is not to make every individual detector perfect.
-
-The goal is to build multiple detectors that provide different, useful signals which can later be combined into a stronger anomaly detection system.
-
-Similarly, the frontend is not intended to independently reproduce anomaly detection logic.
-
-Its eventual role is to provide a clear and useful interface for interacting with the outputs of the SkyGuard detection system.
-
-The final goal is a modular system in which:
+Status:
 
 ```text
-Reliable Data
-     +
-Complementary Detection Methods
-     +
-Detector Fusion
-     +
-Clear Visualization
-     =
-SkyGuard
+ACTIVE BASELINE
 ```
 
-A scalable and explainable anomaly detection system for Automatic Weather Stations.
+Strength:
+
+* Good precision
+* Strong general-purpose rule-based detection
+
+---
+
+## Spatial Detector
+
+Status:
+
+```text
+ACTIVE BASELINE
+```
+
+Strength:
+
+* Geographic consistency
+* Localized station faults
+
+---
+
+## LSTM Autoencoder
+
+Status:
+
+```text
+FROZEN BASELINE
+```
+
+Current state:
+
+* Trained calibration cached
+* No retraining required for evaluation
+* P99 baseline established
+* Threshold multiplier diagnostics completed
+* Persistence simulation tested
+* Combined complementarity evaluated
+
+The detector should remain unchanged until fusion experiments indicate a clear reason for modification.
+
+---
+
+# 24. Results Directories
+
+Current evaluation outputs are separated by experiment.
+
+```text
+results/
+│
+├── statistical/
+│
+├── spatial/
+│
+├── lstm_autoencoder/
+│   ├── calibration.pkl
+│   ├── scored_evaluation.parquet
+│   ├── threshold_sweep.csv
+│   ├── lstm_ae_evaluation.png
+│   └── lstm_ae_threshold_analysis.png
+│
+└── statistical_spatial_lstm/
+    ├── combined_metrics.csv
+    ├── combined_full_results.parquet
+    └── three_detector_comparison.png
+```
+
+Generated results should generally not be manually edited.
+
+They should be reproducible by rerunning the relevant evaluation pipeline.
+
+---
+
+# 25. Detector Output Conventions
+
+Detector output columns should use a consistent prefix.
+
+Examples:
+
+```text
+statistical_alert
+spatial_alert
+lstm_ae_alert
+```
+
+LSTM-specific outputs include concepts such as:
+
+```text
+lstm_ae_score
+lstm_ae_severity_score
+lstm_ae_severity_label
+lstm_ae_alert
+lstm_ae_top_contributor
+```
+
+Per-variable reconstruction diagnostics may also be produced:
+
+```text
+temperature_lstm_ae_error
+pressure_lstm_ae_error
+humidity_lstm_ae_error
+```
+
+New detectors should follow the same convention:
+
+```text
+detector_name_score
+detector_name_alert
+detector_name_severity_label
+```
+
+Avoid generic names such as:
+
+```text
+score
+alert
+prediction
+```
+
+because multiple detector outputs coexist in combined evaluation.
+
+---
+
+# 26. Adding a New Detector
+
+A new detector should generally follow this structure.
+
+## Step 1: Add detector implementation
+
+Location:
+
+```text
+src/skyguard/detectors/
+```
+
+Example:
+
+```text
+my_detector.py
+```
+
+---
+
+## Step 2: Define calibration
+
+Separate:
+
+```text
+Calibration / Training
+```
+
+from:
+
+```text
+Inference
+```
+
+The detector should not silently learn from evaluation data.
+
+---
+
+## Step 3: Define stable output columns
+
+Example:
+
+```text
+my_detector_score
+my_detector_alert
+my_detector_severity
+```
+
+---
+
+## Step 4: Create an evaluator
+
+Location:
+
+```text
+src/skyguard/evaluation/
+```
+
+Example:
+
+```text
+evaluate_my_detector.py
+```
+
+The evaluator should:
+
+1. Load historical calibration data
+2. Calibrate/train using historical data only
+3. Load unseen evaluation data
+4. Inject anomalies
+5. Run inference
+6. Calculate observation metrics
+7. Calculate event metrics
+8. Evaluate by anomaly type
+9. Analyze false positives
+10. Save artifacts
+
+---
+
+## Step 5: Test complementarity
+
+Do not stop at standalone metrics.
+
+Also ask:
+
+```text
+Which anomalies does this detector uniquely detect?
+```
+
+A detector with moderate standalone metrics may still be valuable if it detects anomaly classes missed by existing detectors.
+
+---
+
+# 27. Fusion Development
+
+The next major development area is:
+
+```text
+src/skyguard/fusion/
+```
+
+Fusion should consume detector outputs rather than modifying detector internals.
+
+Conceptually:
+
+```text
+Statistical Output
+        │
+Spatial Output
+        │
+LSTM Output
+        │
+        ▼
+   Fusion Engine
+        │
+        ▼
+Final Score / Alert
+```
+
+The fusion layer should initially treat detectors as independent evidence sources.
+
+---
+
+## Recommended initial fusion experiments
+
+Start with simple baselines.
+
+### Experiment 1
+
+```text
+Statistical OR Spatial
+```
+
+Current baseline.
+
+---
+
+### Experiment 2
+
+```text
+Any 2 of 3 detectors
+```
+
+Useful for reducing false positives while maintaining complementary evidence.
+
+---
+
+### Experiment 3
+
+Weighted score
+
+Example:
+
+```text
+final_score =
+    w_statistical × statistical_score
+  + w_spatial × spatial_score
+  + w_lstm × lstm_score
+```
+
+Scores should be normalized before combining.
+
+---
+
+### Experiment 4
+
+Evidence-aware fusion
+
+Example:
+
+```text
+High statistical confidence
++ High spatial confidence
+
+→ Strong anomaly
+
+Moderate LSTM anomaly
++ Statistical confirmation
+
+→ Strong anomaly
+
+LSTM-only anomaly
+
+→ Suspicious / lower confidence
+```
+
+---
+
+# 28. Fusion Evaluation Rules
+
+Fusion experiments must not be evaluated casually.
+
+Every fusion experiment should use:
+
+```text
+Same benchmark
+Same anomaly injection
+Same random seed
+Same evaluation metrics
+```
+
+Track:
+
+* Precision
+* Recall
+* F1
+* False-positive rate
+* Buffer-clear false-positive rate
+* Event recall
+* Recall by anomaly type
+* Unique events recovered
+
+Do not optimise only for F1.
+
+SkyGuard is an anomaly detection system.
+
+Operational considerations matter:
+
+```text
+Too many alerts
+        ↓
+Alert fatigue
+
+Too few alerts
+        ↓
+Missed faults
+```
+
+The correct operating point depends on the intended final use case.
+
+---
+
+# 29. Recommended Development Order
+
+The current recommended development sequence is:
+
+```text
+1. Statistical Detector
+        ✓ baseline complete
+
+2. Spatial Detector
+        ✓ baseline complete
+
+3. LSTM Autoencoder
+        ✓ baseline complete
+
+4. Combined Evaluation
+        ✓ baseline complete
+
+5. Detector Fusion
+        ← CURRENT NEXT STEP
+
+6. Final Integrated Evaluation
+
+7. Backend / API Integration
+
+8. Frontend Integration
+```
+
+The current priority is fusion.
+
+Further isolated LSTM optimisation should be postponed unless fusion experiments reveal a specific weakness that requires detector-level changes.
+
+---
+
+# 30. Important Experimental Rules
+
+## Do not retrain accidentally
+
+If evaluating the existing LSTM baseline:
+
+```text
+Load calibration.pkl
+```
+
+Do not retrain unless explicitly testing a new model configuration.
+
+---
+
+## Do not compare detectors on different anomaly injections
+
+Bad:
+
+```text
+Statistical → seed A
+Spatial → seed B
+LSTM → seed C
+```
+
+Good:
+
+```text
+Shared benchmark → all detectors
+```
+
+---
+
+## Do not tune on test labels without documenting it
+
+Synthetic evaluation labels are useful for experiments.
+
+However, thresholds selected directly from evaluation data should be clearly identified as experimental.
+
+Production thresholds should originate from calibration data unless a formal validation procedure is introduced.
+
+---
+
+## Distinguish clean false positives from window contamination
+
+For window-based detectors, use buffer-aware analysis.
+
+Do not assume every clean row near an anomaly represents an intrinsic detector false positive.
+
+---
+
+## Keep dropout separate
+
+Dropout is primarily a missing-data problem.
+
+Do not distort detector comparisons by expecting every numerical anomaly detector to solve it.
+
+---
+
+# 31. Reproducibility Checklist
+
+Before reporting an experiment, record:
+
+```text
+Detector configuration
+Calibration dataset period
+Evaluation dataset period
+Random seed
+Anomaly injection rate
+Anomaly types included
+Threshold configuration
+Fusion policy
+Persistence policy
+```
+
+For combined experiments also record:
+
+```text
+Was the benchmark shared? YES/NO
+Was the LSTM retrained? YES/NO
+Was inference run once? YES/NO
+Were detector outputs reused? YES/NO
+```
+
+---
+
+# 32. Current Architecture Summary
+
+SkyGuard currently has three complementary anomaly detectors.
+
+```text
+STATISTICAL
+    │
+    ├── Historical / temporal deviations
+    │
+SPATIAL
+    │
+    ├── Neighbour consistency
+    │
+LSTM AUTOENCODER
+    │
+    ├── Multivariate temporal reconstruction
+    │
+    ▼
+FUSION
+    │
+    ▼
+FINAL ANOMALY DECISION
+```
+
+The current philosophy is:
+
+> Do not force every detector to solve every anomaly type.
+
+Instead:
+
+> Build complementary detectors, evaluate them fairly on the same benchmark, measure what unique information each contributes, and combine their evidence intelligently.
+
+---
+
+# 33. Current Development Status
+
+| Component                          | Status                |
+| ---------------------------------- | --------------------- |
+| Data pipeline                      | Active                |
+| Synthetic anomaly injector         | Active                |
+| Statistical detector               | Baseline complete     |
+| Spatial detector                   | Baseline complete     |
+| LSTM Autoencoder                   | Baseline frozen       |
+| LSTM threshold diagnostics         | Completed             |
+| LSTM persistence simulation        | Tested                |
+| Three-detector combined evaluation | Completed             |
+| Complementarity analysis           | Completed             |
+| Fusion layer                       | Next development task |
+| Backend integration                | Future                |
+| Frontend integration               | Future                |
+
+---
+
+# Final Guidance for Developers
+
+When making changes, follow this principle:
+
+```text
+Change one thing
+      ↓
+Evaluate it reproducibly
+      ↓
+Compare against baseline
+      ↓
+Keep it only if it improves the system
+```
+
+Do not optimise detectors in isolation indefinitely.
+
+SkyGuard is a multi-detector anomaly detection system.
+
+The value of a detector is determined not only by its standalone performance, but also by:
+
+* What anomalies it uniquely detects
+* Whether it complements other detectors
+* How many false positives it introduces
+* How useful its evidence is to the fusion layer
+
+The current next step is therefore to build and evaluate detector fusion using the frozen Statistical, Spatial, and LSTM Autoencoder baselines.
