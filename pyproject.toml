@@ -23,8 +23,13 @@ dependencies = [
     "lime>=0.2",
 ]
 
-
 [project.optional-dependencies]
+frontend = [
+    "streamlit>=1.35",
+    "plotly>=5.20",
+    "streamlit-autorefresh>=1.0",
+]
+
 dev = [
     "jupyter>=1.0",
     "ipykernel>=6.0",
