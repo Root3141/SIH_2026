@@ -266,13 +266,28 @@ def _normalize_frame(
     clip_z: float,
 ) -> pd.DataFrame:
     out = df.copy()
-    for station_id, idx in df.groupby("station_id").groups.items():
-        stats = _stats_for_station(station_id, variables, global_stats, station_stats)
+
+    # Force normalized variables to floating point.
+    # Z-score normalization cannot preserve integer dtype.
+    for var in variables:
+        out[var] = pd.to_numeric(out[var], errors="coerce").astype(np.float64)
+
+    for station_id, idx in out.groupby("station_id").groups.items():
+        stats = _stats_for_station(
+            station_id,
+            variables,
+            global_stats,
+            station_stats,
+        )
+
         for var in variables:
-            mean, std = stats[var]["mean"], stats[var]["std"]
-            z = (out.loc[idx, var].to_numpy(dtype=float) - mean) / std
-            z = np.clip(z, -clip_z, clip_z)
-            out.loc[idx, var] = z
+            mean = stats[var]["mean"]
+            std = stats[var]["std"]
+
+            z = (out.loc[idx, var].to_numpy(dtype=np.float64) - mean) / std
+
+            out.loc[idx, var] = np.clip(z, -clip_z, clip_z)
+
     return out
 
 
