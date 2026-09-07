@@ -850,21 +850,22 @@ def inject_anomalies(
         df,
         variables,
     )
-
     rng = np.random.default_rng(config.random_seed)
-
     result = df.copy()
-
     result["timestamp"] = pd.to_datetime(
         result["timestamp"],
         utc=True,
     )
-
-    result = result.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
-
+    result = result.sort_values(
+    ["station_id", "timestamp"]
+    ).reset_index(drop=True)
     for variable in variables:
+        result[variable] = pd.to_numeric(
+            result[variable],
+            errors="coerce",
+        ).astype(float)
         result[f"{variable}_original"] = result[variable]
-
+        
     result["synthetic_anomaly"] = False
 
     result["synthetic_anomaly_type"] = pd.Series(
@@ -1533,12 +1534,7 @@ if __name__ == "__main__":
 
     overlap_ok = True
 
-    for _, group in events_df.groupby(
-        [
-            "station_id",
-            "variable"
-        ]
-    ):
+    for _, group in events_df.groupby(["station_id", "variable"]):
 
         intervals = sorted(
             zip(
