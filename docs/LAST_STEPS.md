@@ -140,6 +140,25 @@ data/synthetic/skyguard_demo_2026.parquet
 data/synthetic/skyguard_demo_2026_log.parquet
 ```
 
+The implementation is available as `skyguard.simulation.create_final_dataset`.
+It prefers `data/raw/ncr_weather_2026_present.parquet` and falls back to the
+CSV source when the Parquet companion is unavailable. It uses the existing
+`inject_anomalies` implementation with `anomaly_rate=0.02` and
+`random_seed=42`, preserves the injector's `synthetic_*` ground-truth fields,
+and adds the canonical `is_anomaly` / `anomaly_*` aliases used by the
+evaluators. Injector UUIDs are replaced with stable sequential event IDs so
+the dataset and event log are byte-for-byte reproducible across runs.
+
+Generate the artifacts from the project root with:
+
+```bash
+python -m skyguard.simulation.create_final_dataset
+```
+
+The ground-truth fields and event log are for offline evaluation and demo
+annotations only. Detector inference must use the weather observations and
+must not use those labels to make decisions.
+
 The injected dataset is the **input to the prototype**.
 
 The injection log is used for evaluation/explanation, not as detector input.
@@ -196,6 +215,32 @@ Do **not** recalibrate from the injected 2026 dataset.
 
 The synthetic labels are for evaluation, not detector calibration.
 
+The implementation is available as `skyguard.fusion.calibrate`. It reads only
+the clean historical dataset, calibrates the statistical and spatial detectors
+using their existing APIs, and copies the existing frozen
+`results/lstm_autoencoder/calibration.pkl` without retraining or changing it.
+The command is:
+
+```bash
+python -m skyguard.fusion.calibrate
+```
+
+By default it writes the following reusable artifacts:
+
+```text
+artifacts/skyguard_v1/statistical.pkl
+artifacts/skyguard_v1/spatial.pkl
+artifacts/skyguard_v1/lstm.pkl
+artifacts/skyguard_v1/fusion_config.json
+```
+
+`statistical.pkl` and `spatial.pkl` contain the detector configuration and
+calibration objects required for inference. `lstm.pkl` is a byte-for-byte copy
+of the frozen LSTM calibration cache. `fusion_config.json` records the
+historical calibration period, detector artifact names, and the prototype
+2-of-3 fusion policy. The module does not read the injected 2026 dataset or
+any synthetic ground-truth labels.
+
 ---
 
 # 5. Step 3 — Save the Calibration Artifacts
@@ -247,6 +292,10 @@ The project already treats this as the frozen baseline and does not retrain it d
 
 For the prototype, whether this artifact needs to be copied into the deployed application depends on whether runtime `fusion.py` is going to execute LSTM inference or consume precomputed LSTM outputs.
 
+The saved Step 2 artifacts are consumed directly by
+`skyguard.fusion.fusion`; detector internals are not recalibrated during this
+runtime step.
+
 ---
 
 # 6. Step 4 — Define the Fusion Policy
@@ -288,6 +337,17 @@ For the prototype, fusion is a deterministic evidence-combination rule.
 Do not introduce the logistic meta-model into the final runtime unless the team explicitly decides that it is the final evaluated strategy.
 
 `evaluate_fusion.py` currently experiments with multiple strategies, including the logistic meta-model, but that is an evaluation tool—not automatically the production policy.
+
+The prototype runtime uses the deterministic 2-of-3 policy. It computes:
+
+```python
+detector_votes = (
+    statistical_alert.astype(int)
+    + spatial_alert.astype(int)
+    + lstm_ae_alert.astype(int)
+)
+final_alert = detector_votes >= 2
+```
 
 ---
 
@@ -367,6 +427,24 @@ final_confidence
 
 Keep detector-specific columns with their existing prefixes; the developer guide explicitly requires this convention to avoid ambiguous columns.
 
+The implementation is available as `skyguard.fusion.fusion.run_fusion`. It
+loads the Step 2 artifacts, restricts detector input to weather fields, runs
+the three frozen detectors, and returns the original input columns plus
+detector-prefixed outputs and:
+
+```text
+detector_votes
+final_alert
+final_severity
+final_confidence
+```
+
+`final_severity` is `normal`, `suspicious`, `anomaly`, or `critical` for 0,
+1, 2, or 3 detector votes. `final_confidence` is detector agreement (`votes /
+3`), not a calibrated probability. Synthetic ground-truth columns may be
+retained in the returned dataframe for evaluation, but are not read by the
+runtime decision path.
+
 ---
 
 # 8. Step 6 — Define Severity
@@ -406,9 +484,20 @@ This mapping should be treated as a **prototype presentation policy**, not as a 
 
 If the existing evaluated fusion implementation already defines a more appropriate tiering scheme, use that instead.
 
+The runtime implementation exposes this policy through
+`skyguard.fusion.assign_final_severity`. It validates that detector agreement
+is in the range 0-3 before assigning the final tier, so severity cannot be
+silently produced from an invalid vote count.
+
 ---
 
 # 9. Step 7 — Define Confidence
+
+This step is intentionally skipped as a separate fusion implementation step.
+The runtime already derives `final_confidence` directly from detector
+agreement and `final_severity`: 0, 1, 2, and 3 votes correspond to normal,
+suspicious, anomaly, and critical. The dashboard should present this as
+detector agreement rather than as a calibrated probability.
 
 Do not pretend that "2 of 3" is a statistically calibrated probability.
 
@@ -434,6 +523,19 @@ This is clearer and more defensible.
 ---
 
 # 10. Step 8 — Decide Between Precomputed and Runtime Inference
+
+Step 8 is implemented for the prototype. The frozen detectors were run once
+on the final injected 2026 benchmark and the stable presentation artifact was
+written to:
+
+```text
+results/prototype/skyguard_demo_2026_results.parquet
+```
+
+It contains the original weather/evaluation fields, detector outputs, vote
+counts, final severity, and agreement-based confidence. Streamlit should load
+this file and must not retrain, recalibrate, inject anomalies, or run detector
+inference during startup.
 
 For the hackathon prototype, use this approach:
 
@@ -476,6 +578,13 @@ then:
 
 ```bash
 python -m skyguard.fusion.fusion
+```
+
+The command reads `data/synthetic/skyguard_demo_2026.parquet`, loads the
+artifacts from `artifacts/skyguard_v1`, applies 2-of-3 fusion, and writes:
+
+```text
+results/prototype/skyguard_demo_2026_results.parquet
 ```
 
 or provide a dedicated preparation command that performs:

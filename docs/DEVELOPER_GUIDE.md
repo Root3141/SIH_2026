@@ -18,17 +18,17 @@ The project analyzes observations from multiple Automatic Weather Stations (AWS)
 
 The primary monitored variables are:
 
-* Temperature
-* Atmospheric Pressure
-* Relative Humidity
+- Temperature
+- Atmospheric Pressure
+- Relative Humidity
 
 SkyGuard deliberately uses multiple complementary anomaly detectors rather than relying on a single model.
 
 Different anomaly types have different signatures:
 
-* A sudden spike may be obvious statistically.
-* A station behaving differently from nearby stations may be spatially anomalous.
-* A subtle temporal pattern may only be visible through sequence modelling.
+- A sudden spike may be obvious statistically.
+- A station behaving differently from nearby stations may be spatially anomalous.
+- A subtle temporal pattern may only be visible through sequence modelling.
 
 The architecture therefore combines multiple independent sources of evidence.
 
@@ -56,7 +56,7 @@ The current ML architecture consists of three detectors.
                                │
                                ▼
                          Fusion Layer
-                         (Next Stage)
+                         (2-of-3 policy)
                                │
                                ▼
                     Final Anomaly Decision
@@ -70,11 +70,11 @@ Focuses on deviations from expected temporal and historical behaviour.
 
 Useful for:
 
-* Extreme values
-* Sudden deviations
-* Historical range violations
-* Temporal abnormalities
-* Persistence-based behaviour
+- Extreme values
+- Sudden deviations
+- Historical range violations
+- Temporal abnormalities
+- Persistence-based behaviour
 
 ---
 
@@ -86,10 +86,10 @@ Uses spatial interpolation and neighbour consistency.
 
 Useful for:
 
-* Localized station faults
-* Isolated offsets
-* Spatial inconsistencies
-* Station-specific spikes
+- Localized station faults
+- Isolated offsets
+- Spatial inconsistencies
+- Station-specific spikes
 
 ---
 
@@ -99,14 +99,42 @@ Learns normal multivariate temporal patterns and measures reconstruction error.
 
 Useful for:
 
-* Multivariate temporal anomalies
-* Complex temporal patterns
-* Drift
-* Noise
-* Rate changes
-* Patterns not easily captured by manually designed statistical rules
+- Multivariate temporal anomalies
+- Complex temporal patterns
+- Drift
+- Noise
+- Rate changes
+- Patterns not easily captured by manually designed statistical rules
 
 The LSTM Autoencoder is intended to complement the existing detectors, not replace them.
+
+The prototype now packages these detectors behind an offline-prepared runtime
+boundary. Clean historical data is used for calibration, the final 2026
+benchmark is injected once, and the frozen detector outputs are fused before
+the dashboard reads them.
+
+The implemented flow is:
+
+```text
+Historical 2023-2025
+        |
+        v
+skyguard.fusion.calibrate
+        |
+        v
+artifacts/skyguard_v1/
+        |
+        +--> Final injected 2026 benchmark
+        |          |
+        |          v
+        +--> skyguard.fusion.fusion
+                   |
+                   v
+results/prototype/skyguard_demo_2026_results.parquet
+                   |
+                   v
+             Streamlit dashboard
+```
 
 ---
 
@@ -139,15 +167,15 @@ The primary branch for anomaly detection work.
 
 Typical responsibilities include:
 
-* Statistical anomaly detection
-* Spatial anomaly detection
-* LSTM Autoencoder
-* Synthetic anomaly generation
-* Detector calibration
-* Detector evaluation
-* Threshold diagnostics
-* Combined detector evaluation
-* Detector fusion
+- Statistical anomaly detection
+- Spatial anomaly detection
+- LSTM Autoencoder
+- Synthetic anomaly generation
+- Detector calibration
+- Detector evaluation
+- Threshold diagnostics
+- Combined detector evaluation
+- Detector fusion
 
 ---
 
@@ -157,13 +185,13 @@ Frontend development branch.
 
 Typical responsibilities include:
 
-* Streamlit dashboard
-* Alert visualization
-* Weather station visualization
-* Sensor health displays
-* Maps
-* Interactive monitoring
-* Future detector output integration
+- Streamlit dashboard
+- Alert visualization
+- Weather station visualization
+- Sensor health displays
+- Maps
+- Interactive monitoring
+- Future detector output integration
 
 ---
 
@@ -311,10 +339,26 @@ SIH_2026/
         │   └── evaluate_combined.py
         │
         ├── fusion/
-        │   └── __init__.py
+                │   ├── __init__.py
+                │   ├── calibrate.py
+                │   └── fusion.py
         │
         └── simulation/
-            └── anomaly_injector.py
+                        ├── anomaly_injector.py
+                        └── create_final_dataset.py
+```
+
+Prototype artifacts are stored outside the source tree:
+
+```text
+artifacts/skyguard_v1/
+├── statistical.pkl
+├── spatial.pkl
+├── lstm.pkl
+└── fusion_config.json
+
+results/prototype/
+└── skyguard_demo_2026_results.parquet
 ```
 
 ---
@@ -339,11 +383,11 @@ Period:
 
 Purpose:
 
-* Detector calibration
-* Threshold estimation
-* Normal behaviour modelling
-* ML training
-* Validation
+- Detector calibration
+- Threshold estimation
+- Normal behaviour modelling
+- ML training
+- Validation
 
 Historical data must not be mixed with unseen evaluation data during calibration.
 
@@ -365,9 +409,9 @@ Current period:
 
 Purpose:
 
-* Unseen detector evaluation
-* Synthetic anomaly injection
-* Benchmark experiments
+- Unseen detector evaluation
+- Synthetic anomaly injection
+- Benchmark experiments
 
 The intended workflow is:
 
@@ -397,6 +441,18 @@ Evaluate Predictions
 ```
 
 This separation is important for preventing evaluation leakage.
+
+For the packaged prototype, run the one-time preparation steps from the
+project root:
+
+```bash
+python -m skyguard.simulation.create_final_dataset
+python -m skyguard.fusion.calibrate
+python -m skyguard.fusion.fusion
+```
+
+The dashboard reads the resulting prototype Parquet file. It does not train,
+calibrate, inject anomalies, or run detector inference at startup.
 
 ---
 
@@ -498,9 +554,9 @@ Synthetic labels are used for evaluation only.
 
 They must not be used to:
 
-* Train the detector
-* Recalibrate thresholds
-* Tune the detector during normal inference
+- Train the detector
+- Recalibrate thresholds
+- Tune the detector during normal inference
 
 They may be used for offline experiments and threshold analysis.
 
@@ -675,11 +731,11 @@ The statistical detector identifies observations that are unusual relative to ex
 
 Typical signals include:
 
-* Range violations
-* Rate-of-change anomalies
-* Z-score deviations
-* Persistence signals
-* Historical deviations
+- Range violations
+- Rate-of-change anomalies
+- Z-score deviations
+- Persistence signals
+- Historical deviations
 
 Run evaluation:
 
@@ -764,9 +820,9 @@ The LSTM Autoencoder is SkyGuard's deep temporal anomaly detector.
 
 Its purpose is to learn normal multivariate temporal behaviour across:
 
-* Temperature
-* Pressure
-* Humidity
+- Temperature
+- Pressure
+- Humidity
 
 Rather than manually specifying every possible anomaly pattern, the model learns to reconstruct normal sequences.
 
@@ -899,11 +955,11 @@ Contains the frozen detector state.
 
 This includes:
 
-* Trained model
-* Normalization state
-* Configuration
-* Calibration thresholds
-* Relevant calibration metadata
+- Trained model
+- Normalization state
+- Configuration
+- Calibration thresholds
+- Relevant calibration metadata
 
 The calibration state should be reused when evaluating the same trained model.
 
@@ -915,10 +971,10 @@ Contains evaluation data after LSTM inference.
 
 This allows diagnostics such as:
 
-* Threshold sweeps
-* Score distributions
-* Buffer analysis
-* False-positive analysis
+- Threshold sweeps
+- Score distributions
+- Buffer analysis
+- False-positive analysis
 
 without retraining the model.
 
@@ -1064,24 +1120,24 @@ The LSTM evaluation showed strong event-level performance for several anomaly ty
 
 The detector was particularly effective for:
 
-* Drift
-* Noise
-* Rate change
-* Spikes
-* Many offsets
+- Drift
+- Noise
+- Rate change
+- Spikes
+- Many offsets
 
 It was weaker for:
 
-* Stuck anomalies
-* Dropouts
+- Stuck anomalies
+- Dropouts
 
 Dropout should not currently be treated as a primary LSTM performance target because missing-data detection is a separate problem.
 
 Threshold increases reduce false positives but primarily begin sacrificing:
 
-* Stuck detection
-* Some offsets
-* Some drift events
+- Stuck detection
+- Some offsets
+- Some drift events
 
 The detector therefore currently remains unchanged pending fusion experiments.
 
@@ -1121,9 +1177,9 @@ src/skyguard/evaluation/evaluate_combined.py
 
 The combined evaluator runs:
 
-* Statistical detector
-* Spatial detector
-* LSTM Autoencoder
+- Statistical detector
+- Spatial detector
+- LSTM Autoencoder
 
 against the same synthetic benchmark.
 
@@ -1224,9 +1280,9 @@ This is extremely conservative.
 
 It is expected to produce:
 
-* High precision
-* Very low false-positive rates
-* Lower recall
+- High precision
+- Very low false-positive rates
+- Lower recall
 
 ---
 
@@ -1273,8 +1329,8 @@ ACTIVE BASELINE
 
 Strength:
 
-* Good precision
-* Strong general-purpose rule-based detection
+- Good precision
+- Strong general-purpose rule-based detection
 
 ---
 
@@ -1288,8 +1344,8 @@ ACTIVE BASELINE
 
 Strength:
 
-* Geographic consistency
-* Localized station faults
+- Geographic consistency
+- Localized station faults
 
 ---
 
@@ -1303,12 +1359,12 @@ FROZEN BASELINE
 
 Current state:
 
-* Trained calibration cached
-* No retraining required for evaluation
-* P99 baseline established
-* Threshold multiplier diagnostics completed
-* Persistence simulation tested
-* Combined complementarity evaluated
+- Trained calibration cached
+- No retraining required for evaluation
+- P99 baseline established
+- Threshold multiplier diagnostics completed
+- Persistence simulation tested
+- Combined complementarity evaluated
 
 The detector should remain unchanged until fusion experiments indicate a clear reason for modification.
 
@@ -1489,6 +1545,47 @@ A detector with moderate standalone metrics may still be valuable if it detects 
 
 # 27. Fusion Development
 
+The prototype fusion runtime is implemented in
+`src/skyguard/fusion/fusion.py`. Its public boundary is:
+
+```python
+results = run_fusion(data)
+```
+
+The function loads the saved statistical, spatial, and frozen LSTM artifacts,
+runs the existing detectors, and applies a deterministic 2-of-3 rule. It
+returns detector-prefixed outputs along with:
+
+```text
+detector_votes
+final_alert
+final_severity
+final_confidence
+```
+
+Severity is presentation policy based on detector agreement:
+
+```text
+0 votes -> normal
+1 vote  -> suspicious
+2 votes -> anomaly
+3 votes -> critical
+```
+
+`final_confidence` is agreement (`detector_votes / 3`), not a calibrated
+probability. Synthetic ground-truth columns may remain in the result for
+evaluation, but they are excluded from detector input and runtime decisions.
+
+The saved presentation artifact is:
+
+```text
+results/prototype/skyguard_demo_2026_results.parquet
+```
+
+Streamlit consumes this file rather than calling the simulator or detector
+logic. The optional stream replay advances through its timestamps and displays
+the precomputed detector and fusion results.
+
 The next major development area is:
 
 ```text
@@ -1597,14 +1694,14 @@ Same evaluation metrics
 
 Track:
 
-* Precision
-* Recall
-* F1
-* False-positive rate
-* Buffer-clear false-positive rate
-* Event recall
-* Recall by anomaly type
-* Unique events recovered
+- Precision
+- Recall
+- F1
+- False-positive rate
+- Buffer-clear false-positive rate
+- Event recall
+- Recall by anomaly type
+- Unique events recovered
 
 Do not optimise only for F1.
 
@@ -1644,18 +1741,20 @@ The current recommended development sequence is:
         ✓ baseline complete
 
 5. Detector Fusion
-        ← CURRENT NEXT STEP
+        ✓ prototype complete
 
 6. Final Integrated Evaluation
+        ✓ precomputed prototype results generated
 
 7. Backend / API Integration
 
 8. Frontend Integration
 ```
 
-The current priority is fusion.
-
-Further isolated LSTM optimisation should be postponed unless fusion experiments reveal a specific weakness that requires detector-level changes.
+The current priority is integrating the precomputed results into the remaining
+frontend and backend surfaces. Further isolated LSTM optimisation should be
+postponed unless a documented evaluation reveals a specific weakness that
+requires detector-level changes.
 
 ---
 
@@ -1780,20 +1879,21 @@ Instead:
 
 # 33. Current Development Status
 
-| Component                          | Status                |
-| ---------------------------------- | --------------------- |
-| Data pipeline                      | Active                |
-| Synthetic anomaly injector         | Active                |
-| Statistical detector               | Baseline complete     |
-| Spatial detector                   | Baseline complete     |
-| LSTM Autoencoder                   | Baseline frozen       |
-| LSTM threshold diagnostics         | Completed             |
-| LSTM persistence simulation        | Tested                |
-| Three-detector combined evaluation | Completed             |
-| Complementarity analysis           | Completed             |
-| Fusion layer                       | Next development task |
-| Backend integration                | Future                |
-| Frontend integration               | Future                |
+| Component                          | Status             |
+| ---------------------------------- | ------------------ |
+| Data pipeline                      | Active             |
+| Synthetic anomaly injector         | Active             |
+| Statistical detector               | Baseline complete  |
+| Spatial detector                   | Baseline complete  |
+| LSTM Autoencoder                   | Baseline frozen    |
+| LSTM threshold diagnostics         | Completed          |
+| LSTM persistence simulation        | Tested             |
+| Three-detector combined evaluation | Completed          |
+| Complementarity analysis           | Completed          |
+| Fusion layer                       | Prototype complete |
+| Precomputed prototype inference    | Complete           |
+| Streamlit result integration       | Active             |
+| Backend integration                | Future             |
 
 ---
 
@@ -1817,9 +1917,12 @@ SkyGuard is a multi-detector anomaly detection system.
 
 The value of a detector is determined not only by its standalone performance, but also by:
 
-* What anomalies it uniquely detects
-* Whether it complements other detectors
-* How many false positives it introduces
-* How useful its evidence is to the fusion layer
+- What anomalies it uniquely detects
+- Whether it complements other detectors
+- How many false positives it introduces
+- How useful its evidence is to the fusion layer
 
-The current next step is therefore to build and evaluate detector fusion using the frozen Statistical, Spatial, and LSTM Autoencoder baselines.
+The detector fusion prototype is now implemented using the frozen Statistical,
+Spatial, and LSTM Autoencoder baselines. Future work should preserve the
+historical calibration boundary and consume the stable precomputed result
+schema.

@@ -23,6 +23,7 @@ This file implements statistical methods to detect anomalies in weather station 
 ## **Core Components**
 
 ### **Configuration Classes**
+
 - **`StatisticalConfig`**: Stores detection parameters like z-score thresholds, time windows (24h, 168h), and persistence tolerances
 - **`StatisticalCalibration`**: Holds pre-computed baselines and thresholds from training data
 
@@ -48,6 +49,7 @@ This file implements statistical methods to detect anomalies in weather station 
 ### **Calibration Process**
 
 `calibrate_statistical_detector` preprocesses training data to:
+
 - Compute hourly baselines (mean values by hour and station)
 - Calculate ROC thresholds (99th percentile of hour-specific changes)
 - Creates station-specific reference profiles
@@ -55,6 +57,7 @@ This file implements statistical methods to detect anomalies in weather station 
 ### **Evidence Aggregation**
 
 `build_evidence_families` groups anomaly flags into four "families":
+
 - **Range**: Out-of-bounds readings
 - **ROC**: Rapid changes
 - **Level**: Statistical deviations (z-score)
@@ -63,6 +66,7 @@ This file implements statistical methods to detect anomalies in weather station 
 ### **Severity Assignment**
 
 `assign_statistical_severity` scores alerts as:
+
 - **Normal** (0.0): No anomalies
 - **Suspicious** (0.33): Single evidence family triggered
 - **Anomaly** (0.67): Multiple families OR persistence flag
@@ -71,6 +75,7 @@ This file implements statistical methods to detect anomalies in weather station 
 ## **Main Workflow**
 
 `run_statistical_detector` orchestrates the full pipeline:
+
 1. Validates input data
 2. Applies all detection methods per variable
 3. Aggregates evidence into families
@@ -91,6 +96,7 @@ This file detects anomalies by comparing each weather station to nearby stations
 ## **Core Components**
 
 ### **Configuration Classes**
+
 - **`SpatialConfig`**: Controls detection behavior
   - `k_neighbors`: Number of nearest stations to use (default 4)
   - `idw_power`: Inverse distance weighting exponent (default 2.0)
@@ -108,6 +114,7 @@ This file detects anomalies by comparing each weather station to nearby stations
 ### **Neighbor Network Building**
 
 **`build_neighbor_weights`**:
+
 1. For each station, calculates distances to all other stations
 2. Selects k-nearest neighbors
 3. Applies inverse distance weighting: `weight = 1 / distance^power`
@@ -117,6 +124,7 @@ This file detects anomalies by comparing each weather station to nearby stations
 ### **Spatial Interpolation**
 
 **`calculate_idw_expected`**:
+
 1. Creates pivot table: rows=timestamps, columns=station_ids, values=variable
 2. For each station, computes Inverse Distance Weighting (IDW) interpolation:
    - Multiplies neighbor values by their normalized weights
@@ -128,6 +136,7 @@ This file detects anomalies by comparing each weather station to nearby stations
 ### **Calibration Process**
 
 **`calibrate_spatial_detector`**:
+
 1. Builds neighbor network using station coordinates
 2. For each variable and station:
    - Calculates IDW expected values
@@ -140,6 +149,7 @@ This file detects anomalies by comparing each weather station to nearby stations
 ### **Detection Logic**
 
 **`run_spatial_detector`**:
+
 1. For each variable:
    - Calculates IDW expected values and residuals
    - Maps station→(P95, P99) thresholds from calibration
@@ -162,6 +172,7 @@ This file detects anomalies by comparing each weather station to nearby stations
 ### **Test Cases**
 
 `_run_self_test()` validates two scenarios:
+
 - **Case A (Isolated spike)**: Station AWS_A +15°C alone → Flagged as anomaly ✓
 - **Case B (Regional event)**: All 4 stations +6°C together → NOT flagged (normal regional variation) ✓
 
@@ -180,6 +191,7 @@ This file synthetically injects realistic anomalies into clean weather station d
 ### **Anomaly Types**
 
 Seven distinct anomaly patterns (as `AnomalyType` enum):
+
 - **SPIKE**: Single sharp deviation from normal
 - **OFFSET**: Sustained constant shift in readings
 - **DRIFT**: Gradual linear change over time
@@ -191,6 +203,7 @@ Seven distinct anomaly patterns (as `AnomalyType` enum):
 ### **Configuration Classes**
 
 **`AnomalyConfig`**:
+
 - `anomaly_rate`: Target percentage of observations to contaminate (default 1%)
 - `min_duration` / `max_duration`: Event length range (1-24 hours, except spikes always = 1)
 - `anomaly_type_weights`: Distribution of anomaly types (e.g., spike 20%, offset 20%)
@@ -210,7 +223,7 @@ temperature:
   spike: low=(2-4°C), medium=(4-8°C), high=(8-15°C)
   offset: low=(1-2°C), medium=(2-5°C), high=(5-10°C)
   drift: low=(0.05-0.10°C/obs), medium=(0.10-0.30°C/obs), high=(0.30-0.60°C/obs)
-  
+
 humidity: (proportionally larger magnitudes: 8-50% depending on type/severity)
 pressure: (smaller magnitudes: 1-10 hPa range)
 ```
@@ -222,36 +235,43 @@ Each variable also has physical bounds (temperature: -10°C to 55°C, humidity: 
 ## **Injection Functions**
 
 ### **Spike** (`inject_spike`)
+
 - Adds random ±magnitude to selected indices
 - Duration: 1 observation only
 - Clipped to physical range
 
 ### **Offset** (`inject_offset`)
+
 - Adds consistent ±magnitude across duration
 - Simulates sensor calibration drift
 - Example: thermometer reading 2°C high for 6 hours
 
 ### **Drift** (`inject_drift`)
+
 - Linear ramp from 0 to ±magnitude over duration
 - Simulates gradual sensor degradation
 - Uses `np.linspace` to create gradient
 
 ### **Stuck** (`inject_stuck`)
+
 - Freezes value at first observation in range
 - No magnitude needed (frozen value is constant)
 - Detectable by zero variance
 
 ### **Noise** (`inject_noise`)
+
 - Scales baseline standard deviation by magnitude factor
 - Adds Gaussian noise: `scale = baseline_std × magnitude`
 - Simulates sensor calibration loss
 
 ### **Dropout** (`inject_dropout`)
+
 - Sets values to NaN
 - Simulates sensor failure/missing transmission
 - Duration-based (e.g., 4-hour data gap)
 
 ### **Rate Change** (`inject_rate_change`)
+
 - Linear ramp added to actual values (not from zero)
 - Creates abrupt change in how fast values increase/decrease
 - Different from drift (which starts from current baseline)
@@ -308,6 +328,7 @@ Each variable also has physical bounds (temperature: -10°C to 55°C, humidity: 
 ## **Statistics & Reporting**
 
 After injection, prints:
+
 - Total/anomalous observation counts
 - Actual anomaly rate vs. target
 - Number of events created
@@ -315,6 +336,7 @@ After injection, prints:
 - Affected observations per variable
 
 Example output:
+
 ```
 Total observations: 2,304
 Anomalous observations: 72
@@ -327,6 +349,7 @@ Anomaly events created: 18
 ## **Test Coverage**
 
 `_run_self_test()` validates:
+
 1. ✓ Actual rate matches target (within 1%)
 2. ✓ STUCK events have zero variance
 3. ✓ DROPOUT events are all NaN
@@ -370,6 +393,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Data Loading**
 
 **`load_datasets()`**:
+
 - Loads `HISTORICAL_PARQUET` (calibration data, e.g., 30 days clean)
 - Loads `PRESENT_PARQUET` (evaluation data, e.g., 7 days for testing)
 - Converts timestamps to UTC and sorts by station + time
@@ -378,6 +402,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Calibration**
 
 **`calibrate_detector()`**:
+
 - Calls `calibrate_statistical_detector()` on historical data
 - Creates `StatisticalConfig` with default parameters
 - Returns calibration object + config
@@ -386,6 +411,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Anomaly Injection**
 
 **`inject_evaluation_anomalies()`**:
+
 1. Calls `inject_anomalies()` with 2% target anomaly rate
 2. Renames synthetic columns to standard names:
    - `synthetic_anomaly` → `is_anomaly` (ground truth flag)
@@ -400,6 +426,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Detection**
 
 **`run_detector()`**:
+
 - Calls `run_statistical_detector()` on contaminated data
 - Returns results with columns: `statistical_alert`, `statistical_severity_label`, etc.
 - Prints: total observations, alert count, alert rate percentage
@@ -407,6 +434,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Observation-Level Evaluation**
 
 **`calculate_binary_metrics()`**:
+
 - Compares ground truth (`is_anomaly`) vs. predictions (`statistical_alert`)
 - Calculates confusion matrix: TP, FP, FN, TN
 - Returns:
@@ -416,6 +444,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
   - **False Positive Rate**: FP / (FP + TN) — of clean observations, what % did we incorrectly flag?
 
 **`evaluate_observation_level()`**:
+
 - Calls `calculate_binary_metrics()`
 - Prints confusion matrix values and all classification metrics
 - Returns metrics as DataFrame
@@ -423,6 +452,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Event-Level Evaluation**
 
 **`evaluate_event_level()`**:
+
 1. Filters to rows with `is_anomaly=True` (injected anomalies only)
 2. Groups by `anomaly_id` (unique event identifier)
 3. For each event, calculates:
@@ -430,12 +460,13 @@ This file comprehensively evaluates the statistical anomaly detector's performan
    - Was event detected? (any row in event has `statistical_alert=True`)
    - How many observations in event were detected?
 4. Returns: total events, detected events, missed events, event-level recall
-5. **Event-level recall**: What fraction of anomaly *events* had ≥1 detection?
+5. **Event-level recall**: What fraction of anomaly _events_ had ≥1 detection?
    - Different from observation-level recall (% of observations detected)
 
 ### **Analysis by Anomaly Type**
 
 **`evaluate_by_anomaly_type()`**:
+
 - Filters anomalies only
 - Groups by `anomaly_type` (spike, offset, drift, stuck, etc.)
 - Calculates recall per type: `detected / total`
@@ -445,6 +476,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Analysis by Variable**
 
 **`evaluate_by_variable()`**:
+
 - Groups injected anomalies by variable (temperature, humidity, pressure)
 - Calculates recall per variable
 - Shows which variables are detected better
@@ -453,6 +485,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **False Positive Analysis**
 
 **`analyze_false_positives()`**:
+
 1. Filters to clean observations only (`is_anomaly=False`)
 2. Counts how many were flagged as alerts (`statistical_alert=True`)
 3. Calculates FP rate: `false_positives / total_clean_observations`
@@ -462,6 +495,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Detector Firing Rates**
 
 **`analyze_detector_firing_rates()`**:
+
 - Lists individual detector columns: `temperature_range_anomaly`, `humidity_zscore_6_anomaly`, etc.
 - Counts how often each detector fires
 - Calculates firing rate percentage
@@ -477,6 +511,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Evidence Family Analysis**
 
 **`analyze_evidence_families()`**:
+
 - Groups detector outputs into four families: range, ROC, level (z-score), persistence
 - Shows how many observations triggered each family
 - Identifies which evidence type is most common
@@ -485,6 +520,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Station Analysis**
 
 **`analyze_station_alerts()`**:
+
 - Groups by `station_id`
 - Calculates: total observations, alert count, alert rate
 - Shows which stations have highest alert rates (might indicate sensor issues or installation location)
@@ -492,6 +528,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Severity Distribution**
 
 **`analyze_severity_distribution()`**:
+
 - Groups by `statistical_severity_label` (normal, suspicious, anomaly, critical)
 - Counts observations and injected anomalies per severity level
 - Shows: how many anomalies fell into each bucket?
@@ -500,6 +537,7 @@ This file comprehensively evaluates the statistical anomaly detector's performan
 ### **Alert Summary**
 
 **`generate_alert_summary()`**:
+
 - Calls `summarize_statistical_alerts()` to aggregate detector signals
 - Removes synthetic columns, keeps real detector signals
 - Sorts by alert count
@@ -534,37 +572,40 @@ Generates 4-panel figure saved to `statistical_detector_evaluation.png`:
 
 **`save_results()`** saves 10 output files to `RESULTS_STATISTICAL_DIR`:
 
-| File | Content |
-|------|---------|
-| `observation_metrics.csv` | TP, FP, FN, TN, precision, recall, F1, FPR |
-| `event_metrics.csv` | Per-event detection: type, variable, severity, duration, detected? |
-| `performance_by_anomaly_type.csv` | Recall for spike/offset/drift/stuck/noise/dropout/rate_change |
-| `performance_by_variable.csv` | Recall for temp/humidity/pressure |
-| `false_positive_analysis.csv` | FP counts per station |
-| `detector_firing_rates.csv` | Individual detector signal rates |
-| `evidence_family_summary.csv` | Range/ROC/level/persistence firing rates |
-| `station_statistics.csv` | Alert rates per station |
-| `severity_distribution.csv` | Distribution across normal/suspicious/anomaly/critical |
-| `injection_log.csv` | Details of all injected anomaly events |
-| `anomaly_predictions.csv` | Rows with `is_anomaly=True` OR `statistical_alert=True` |
-| `full_results.parquet` | Complete result DataFrame (all columns) |
-| `statistical_detector_evaluation.png` | 4-panel evaluation plot |
+| File                                  | Content                                                            |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| `observation_metrics.csv`             | TP, FP, FN, TN, precision, recall, F1, FPR                         |
+| `event_metrics.csv`                   | Per-event detection: type, variable, severity, duration, detected? |
+| `performance_by_anomaly_type.csv`     | Recall for spike/offset/drift/stuck/noise/dropout/rate_change      |
+| `performance_by_variable.csv`         | Recall for temp/humidity/pressure                                  |
+| `false_positive_analysis.csv`         | FP counts per station                                              |
+| `detector_firing_rates.csv`           | Individual detector signal rates                                   |
+| `evidence_family_summary.csv`         | Range/ROC/level/persistence firing rates                           |
+| `station_statistics.csv`              | Alert rates per station                                            |
+| `severity_distribution.csv`           | Distribution across normal/suspicious/anomaly/critical             |
+| `injection_log.csv`                   | Details of all injected anomaly events                             |
+| `anomaly_predictions.csv`             | Rows with `is_anomaly=True` OR `statistical_alert=True`            |
+| `full_results.parquet`                | Complete result DataFrame (all columns)                            |
+| `statistical_detector_evaluation.png` | 4-panel evaluation plot                                            |
 
 ---
 
 ## **Key Metrics Explained**
 
 **Precision vs. Recall Trade-off**:
+
 - **High Precision, Low Recall**: Detector is conservative, rarely flags things. When it does, it's usually right. But misses many real anomalies.
 - **Low Precision, High Recall**: Detector is aggressive, catches most real anomalies but produces many false alarms.
 - **Goal**: Balance both (high F1 score)
 
 **Event-Level vs. Observation-Level**:
-- **Event-level recall**: Did we detect the anomaly *somewhere* in its duration?
+
+- **Event-level recall**: Did we detect the anomaly _somewhere_ in its duration?
 - **Observation-level recall**: What percentage of individual anomalous readings did we catch?
 - Event-level is more lenient (1 detection = success for whole event)
 
 **False Positive Rate**:
+
 - Ratio of incorrectly flagged clean observations
 - Example: 0.01% FPR = 1 in 10,000 clean observations falsely flagged
 - Critical for operational systems (high FP → alert fatigue)
@@ -636,6 +677,7 @@ This file comprehensively evaluates the spatial anomaly detector's performance u
 ### **Data Loading**
 
 **`load_datasets()`**:
+
 - Loads `HISTORICAL_PARQUET` and `PRESENT_PARQUET` (same as statistical evaluator)
 - Ensures timestamps are UTC
 - Prints summaries: row counts, station counts, date ranges
@@ -644,6 +686,7 @@ This file comprehensively evaluates the spatial anomaly detector's performance u
 ### **Calibration**
 
 **`calibrate_detector()`**:
+
 1. Extracts station coordinates (latitude, longitude) from data
 2. Calls `calibrate_spatial_detector()` with:
    - Historical data
@@ -658,6 +701,7 @@ Key difference from statistical: **requires geographic coordinates** to build ne
 ### **Anomaly Injection**
 
 **`inject_evaluation_anomalies()`**:
+
 - Same as statistical evaluator
 - 2% target anomaly rate
 - Renames synthetic columns:
@@ -672,6 +716,7 @@ Key difference from statistical: **requires geographic coordinates** to build ne
 ### **Detection**
 
 **`run_detector()`**:
+
 - Calls `run_spatial_detector()` on contaminated data
 - Returns results with `spatial_alert` column
 - Prints: total observations, alert count, alert rate
@@ -683,6 +728,7 @@ Key difference from statistical: **requires geographic coordinates** to build ne
 ### **Binary Classification Metrics**
 
 **`calculate_binary_metrics()`**:
+
 - Same as statistical evaluator
 - Compares ground truth (`is_anomaly`) vs. predictions (`spatial_alert`)
 - Calculates: TP, FP, FN, TN, precision, recall, F1, false positive rate
@@ -690,6 +736,7 @@ Key difference from statistical: **requires geographic coordinates** to build ne
 ### **Observation-Level Evaluation**
 
 **`evaluate_observation_level()`**:
+
 - Calls `calculate_binary_metrics()`
 - Prints confusion matrix: TP, FP, FN, TN counts
 - Prints classification metrics: precision, recall, F1, FPR
@@ -698,6 +745,7 @@ Key difference from statistical: **requires geographic coordinates** to build ne
 ### **Event-Level Evaluation**
 
 **`evaluate_event_level()`**:
+
 1. Filters to injected anomalies only (`is_anomaly=True`)
 2. Groups by `anomaly_id` (unique event)
 3. Aggregates per event:
@@ -708,6 +756,7 @@ Key difference from statistical: **requires geographic coordinates** to build ne
 5. Returns DataFrame with one row per anomaly event
 
 Example:
+
 ```
 anomaly_id  anomaly_type  variable     duration  detected  observations_detected
 evt_001     spike         temperature  1         True      1
@@ -718,6 +767,7 @@ evt_003     offset        pressure     6         False     0
 ### **Performance by Anomaly Type**
 
 **`evaluate_by_anomaly_type()`**:
+
 1. Filters to injected anomalies only
 2. Groups by `anomaly_type` (spike, offset, drift, stuck, noise, dropout, rate_change)
 3. Per type, calculates:
@@ -730,6 +780,7 @@ evt_003     offset        pressure     6         False     0
 Shows which anomaly types spatial detector is good/bad at detecting.
 
 Example output:
+
 ```
 anomaly_type  total_observations  detected  missed  recall  recall_percent
 stuck         45                  44        1       0.9778  97.78
@@ -743,6 +794,7 @@ noise         33                  10        23      0.3030  30.30
 ### **Performance by Variable**
 
 **`evaluate_by_variable()`**:
+
 1. For each variable (temperature, humidity, pressure)
 2. Filters to rows where:
    - Ground truth: `is_anomaly=True` AND `anomaly_variable==variable`
@@ -755,6 +807,7 @@ Shows which variables (temp/humidity/pressure) spatial detector handles best.
 ### **False Positive Analysis**
 
 **`analyze_false_positives()`**:
+
 1. Filters to clean observations (`is_anomaly=False`)
 2. Counts how many were incorrectly flagged as alerts (`spatial_alert=True`)
 3. Calculates false positive rate: FP / (FP + TN)
@@ -766,6 +819,7 @@ Identifies stations with high false positive rates (over-sensitive or noisy).
 ### **Severity Distribution**
 
 **`analyze_severity_distribution()`**:
+
 1. Groups by `spatial_severity_level` (normal, suspicious, anomaly, critical)
 2. For each severity level, calculates:
    - Total observations
@@ -777,6 +831,7 @@ Identifies stations with high false positive rates (over-sensitive or noisy).
 Shows distribution of observations across severity buckets.
 
 Example:
+
 ```
 spatial_severity_level  observations  anomalies  alerts  anomaly_rate_percent
 normal                  4500          5          0       0.11
@@ -792,10 +847,12 @@ critical                0             0          0       —
 **`run_regional_event_test()`**:
 
 This is a critical **sanity check** that spatial detector correctly distinguishes:
+
 - **Isolated anomalies** (one station deviates) → Should be flagged ✓
 - **Regional events** (all stations move together) → Should NOT be flagged ✓
 
 Process:
+
 1. Randomly selects a timestamp in middle of dataset
 2. Adds shared +6°C to all stations at that timestamp (simulating regional weather event)
 3. Runs spatial detector on modified data
@@ -806,6 +863,7 @@ Process:
 This validates that detector catches sensor malfunctions but ignores real weather patterns.
 
 Example output:
+
 ```
 Injected regional event:
   Timestamp: 2026-12-15 14:00:00
@@ -847,19 +905,19 @@ Spatial alerts during regional event: 0/10
 
 **`save_results()`** saves 8 output files to `OUTPUT_DIR` (results/spatial/):
 
-| File | Content |
-|------|---------|
-| `injection_log.csv` | Details of all injected anomaly events |
-| `observation_metrics.csv` | TP, FP, FN, TN, precision, recall, F1, FPR |
-| `event_metrics.csv` | Per-event detection: type, variable, duration, detected? |
+| File                              | Content                                                       |
+| --------------------------------- | ------------------------------------------------------------- |
+| `injection_log.csv`               | Details of all injected anomaly events                        |
+| `observation_metrics.csv`         | TP, FP, FN, TN, precision, recall, F1, FPR                    |
+| `event_metrics.csv`               | Per-event detection: type, variable, duration, detected?      |
 | `performance_by_anomaly_type.csv` | Recall for spike/offset/drift/stuck/noise/dropout/rate_change |
-| `performance_by_variable.csv` | Per-variable metrics (temp/humidity/pressure) |
-| `false_positive_analysis.csv` | FP counts per station |
-| `severity_distribution.csv` | Distribution across normal/suspicious/anomaly/critical |
-| `regional_event_test.csv` | Results from sanity test (stations during regional event) |
-| `anomaly_predictions.csv` | Rows with `is_anomaly=True` OR `spatial_alert=True` |
-| `full_results.parquet` | Complete result DataFrame (all columns) |
-| `spatial_detector_evaluation.png` | 4-panel evaluation plot |
+| `performance_by_variable.csv`     | Per-variable metrics (temp/humidity/pressure)                 |
+| `false_positive_analysis.csv`     | FP counts per station                                         |
+| `severity_distribution.csv`       | Distribution across normal/suspicious/anomaly/critical        |
+| `regional_event_test.csv`         | Results from sanity test (stations during regional event)     |
+| `anomaly_predictions.csv`         | Rows with `is_anomaly=True` OR `spatial_alert=True`           |
+| `full_results.parquet`            | Complete result DataFrame (all columns)                       |
+| `spatial_detector_evaluation.png` | 4-panel evaluation plot                                       |
 
 ---
 
@@ -890,15 +948,15 @@ Prints timestamps and progress messages throughout.
 
 ## **Key Differences from Statistical Evaluator**
 
-| Aspect | Statistical | Spatial |
-|--------|-------------|---------|
-| **Calibration data** | Time series patterns | Geographic coordinates |
-| **Detection logic** | Temporal baselines (hourly) | Spatial interpolation (IDW) |
-| **Anomaly detection** | Per-variable deviation from baseline | Per-station deviation from neighbors |
-| **Regional events** | May flag all stations | Should NOT flag (all neighbors agree) |
-| **Sanity test** | Isolated spike vs. noise | Regional event vs. local spike |
-| **Strength** | Detects temporal patterns | Detects spatial inconsistencies |
-| **Weakness** | Misses coordinated regional events | Misses coordinated regional events |
+| Aspect                | Statistical                          | Spatial                               |
+| --------------------- | ------------------------------------ | ------------------------------------- |
+| **Calibration data**  | Time series patterns                 | Geographic coordinates                |
+| **Detection logic**   | Temporal baselines (hourly)          | Spatial interpolation (IDW)           |
+| **Anomaly detection** | Per-variable deviation from baseline | Per-station deviation from neighbors  |
+| **Regional events**   | May flag all stations                | Should NOT flag (all neighbors agree) |
+| **Sanity test**       | Isolated spike vs. noise             | Regional event vs. local spike        |
+| **Strength**          | Detects temporal patterns            | Detects spatial inconsistencies       |
+| **Weakness**          | Misses coordinated regional events   | Misses coordinated regional events    |
 
 ---
 
@@ -993,3 +1051,134 @@ Results saved to: /home/aaryan/sih/skyguard/results/spatial
 ## End of Documentation
 
 This comprehensive guide covers all major components of the SkyGuard anomaly detection system for weather station observations. Each module is designed to work together: statistical detection identifies temporal anomalies, spatial detection identifies geographic inconsistencies, anomaly injection creates ground-truth datasets, and evaluation frameworks assess detector performance comprehensively.
+
+---
+
+# Prototype Integration Reference
+
+The prototype adds an offline preparation and runtime boundary around the
+existing detectors. The dashboard consumes precomputed results and does not
+run calibration or detector inference on startup.
+
+## Final Demo Dataset
+
+`src/skyguard/simulation/create_final_dataset.py` creates the reproducible
+2026 benchmark from the clean present dataset. It uses:
+
+```text
+anomaly rate: 2%
+random seed: 42
+variables: temperature, humidity, pressure
+```
+
+Outputs:
+
+```text
+data/synthetic/skyguard_demo_2026.parquet
+data/synthetic/skyguard_demo_2026_log.parquet
+```
+
+The dataset retains `synthetic_*` metadata and canonical evaluation aliases:
+`is_anomaly`, `anomaly_id`, `anomaly_type`, `anomaly_variable`, and
+`anomaly_severity`. These fields are for evaluation and explanation only.
+
+Generate it with:
+
+```bash
+python -m skyguard.simulation.create_final_dataset
+```
+
+## Calibration Artifacts
+
+`src/skyguard/fusion/calibrate.py` calibrates statistical and spatial
+detectors from clean historical data only, covering 2023-01-01 through
+2025-12-31. It copies the existing frozen LSTM calibration state without
+retraining it.
+
+Outputs:
+
+```text
+artifacts/skyguard_v1/statistical.pkl
+artifacts/skyguard_v1/spatial.pkl
+artifacts/skyguard_v1/lstm.pkl
+artifacts/skyguard_v1/fusion_config.json
+```
+
+Run it with:
+
+```bash
+python -m skyguard.fusion.calibrate
+```
+
+The injected 2026 dataset and its synthetic labels must not be used by this
+calibration step.
+
+## Runtime Fusion Contract
+
+`src/skyguard/fusion/fusion.py` exposes:
+
+```python
+results = run_fusion(data)
+```
+
+The input requires:
+
+```text
+station_id
+timestamp
+temperature
+pressure
+humidity
+```
+
+The function loads the saved artifacts, runs the three frozen detectors, and
+applies the deterministic 2-of-3 policy:
+
+```python
+detector_votes = (
+   statistical_alert.astype(int)
+   + spatial_alert.astype(int)
+   + lstm_ae_alert.astype(int)
+)
+final_alert = detector_votes >= 2
+```
+
+The output retains input fields and detector-prefixed fields, then adds:
+
+```text
+detector_votes
+final_alert
+final_severity
+final_confidence
+```
+
+Final severity is mapped from detector agreement:
+
+```text
+0 -> normal
+1 -> suspicious
+2 -> anomaly
+3 -> critical
+```
+
+`final_confidence` is `detector_votes / 3`, representing agreement rather
+than a calibrated probability. Runtime decisions do not read synthetic
+ground-truth columns.
+
+## Precomputed Prototype Results
+
+The one-time inference command is:
+
+```bash
+python -m skyguard.fusion.fusion
+```
+
+It reads the final injected benchmark and writes:
+
+```text
+results/prototype/skyguard_demo_2026_results.parquet
+```
+
+Streamlit reads this result file for replay, station status, detector
+agreement, severity, and alert history. The dashboard must not retrain,
+recalibrate, inject anomalies, or run detector inference during startup.

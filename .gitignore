@@ -35,6 +35,8 @@ data/synthetic/*
 !data/synthetic/.gitkeep
 results/*
 !results/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
 
 *.pkl
 *.pickle
