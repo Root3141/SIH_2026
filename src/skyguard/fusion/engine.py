@@ -32,20 +32,20 @@ class FusionEngine:
         """Run every registered strategy on every row of df.
 
         Adds two columns per strategy:
-            fusion_<strategy>_alert
-            fusion_<strategy>_score
+            fusion_<strategy>_label  (one of "normal"/"suspicious"/"anomaly")
+            fusion_<strategy>_score  (continuous, for ranking/plotting)
         Leaves all original columns untouched.
         """
         out = df.copy()
         evidence_per_row = [self.evidence_for_row(row) for _, row in df.iterrows()]
 
         for strategy in self.strategies:
-            alerts, scores = [], []
+            labels, scores = [], []
             for evidence in evidence_per_row:
                 result = strategy.fuse(evidence)
-                alerts.append(result.alert)
+                labels.append(result.label)
                 scores.append(result.score)
-            out[f"fusion_{strategy.name}_alert"] = alerts
+            out[f"fusion_{strategy.name}_label"] = labels
             out[f"fusion_{strategy.name}_score"] = scores
 
         return out

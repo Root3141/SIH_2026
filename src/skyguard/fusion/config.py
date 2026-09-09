@@ -61,10 +61,15 @@ DETECTOR_REGISTRY: Dict[str, DetectorSpec] = {
     ),
     "lstm_ae": DetectorSpec(
         name="lstm_ae",
-        alert_col="lstm_ae_alert",
-        score_col="lstm_ae_score",
-        severity_col="lstm_ae_severity_label",
-        normalize=lambda x: min(max(x, 0.0), 1.0),  # TODO: replace with P99-relative scaling
+        alert_col="lstm_ae_alert_original",  # confirmed from evaluate_combined.py output
+        score_col=None,  # TODO: unverified - set the real reconstruction-error column
+        # name once known (evaluate_combined.py compares it against
+        # calibration P95/P99: 0.008555 / 0.017892). Until then this
+        # detector contributes a binary 0/1 signal like the other two,
+        # which is fine for the count-based tier strategy below but
+        # limits the weighted/logistic strategies to alert-only info.
+        severity_col=None,
+        normalize=lambda x: min(max(x, 0.0), 1.0),
     ),
 }
 

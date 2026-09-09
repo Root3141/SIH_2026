@@ -11,6 +11,17 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 
+# The three output classes fusion must produce. Kept as plain strings
+# (not an enum) so they serialize cleanly into dataframes/parquet/CSV.
+NORMAL = "normal"
+SUSPICIOUS = "suspicious"
+ANOMALY = "anomaly"
+
+# Fixed ordering, used for anything that needs to compare severity
+# (e.g. "is this row at least SUSPICIOUS?").
+LABEL_ORDER = [NORMAL, SUSPICIOUS, ANOMALY]
+
+
 @dataclass
 class DetectorEvidence:
     """Normalized evidence produced by a single detector for one observation.
@@ -29,9 +40,14 @@ class DetectorEvidence:
 
 @dataclass
 class FusionResult:
-    """Output of a single fusion strategy for one observation."""
+    """Output of a single fusion strategy for one observation.
 
-    alert: bool
+    label is always one of NORMAL / SUSPICIOUS / ANOMALY. score is kept
+    alongside it as a continuous value for ranking/plotting, but `label`
+    is the field the rest of the system (dashboard, XAI) should read.
+    """
+
+    label: str
     score: float
     strategy: str
     contributing_detectors: Dict[str, DetectorEvidence] = field(default_factory=dict)
