@@ -273,6 +273,7 @@ The important repository structure is approximately:
 
 ```text
 SIH_2026/
+SIH_2026/
 │
 ├── README.md
 ├── DEVELOPER_GUIDE.md
@@ -719,6 +720,7 @@ D: 21°C
 Expected spatial value ≈ 22°C
 
 Residual:
+
 
 35 - 22 = 13°C
 
