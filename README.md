@@ -696,19 +696,25 @@ The dashboard can then present the supporting detector evidence and available ex
 
 ## Screenshots
 
-Important dashboard screenshots and prototype images are stored under:
+### Dashboard Overview
 
-```text
-assets/screenshots/
-```
+![SkyGuard AI Dashboard](assets/screenshots/Dashboard_Overview.png)
 
-Recommended screenshots include:
+### Station Detail — Alert Detection
 
-* Dashboard overview
-* Station Detail
-* Anomaly alert
-* Explainability / diagnosis view
+![SkyGuard AI Station Detail](assets/screenshots/Station_Detail.png)
 
+### Alert Explanation and 2-of-3 Detector Fusion
+
+![SkyGuard AI Alert Explanation](assets/screenshots/Alert_Explanation.png)
+
+### Live Map with Anomaly Alert
+
+![SkyGuard AI Live Map](assets/screenshots/Live_Map.png)
+
+### Live Sensor Trends
+
+![SkyGuard AI Sensor Trends](assets/screenshots/Sensor_Trends.png)
 ---
 
 ## Documentation
