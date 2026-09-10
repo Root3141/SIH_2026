@@ -20,19 +20,29 @@ def _load_detail(path, modified, station, timestamp):
 def render_explanation(current):
     explanation=explain_alert(current)
     path=ROOT/'results/explainability/operator_explanations.parquet'
+    debug_reason=None
     if path.exists():
         try:
             candidate=_load_detail(str(path),path.stat().st_mtime_ns,current['station_id'],current['timestamp'])
-            # Refuse stale decisions/readings. Full explanations are retrospective
-            # batch outputs, just like the detector's overlapping-window scores.
-            if candidate and candidate['decision']==explanation['decision']:
+            if candidate is None:
+                debug_reason='no matching station_id/timestamp row in operator_explanations.parquet'
+            elif candidate['decision']!=explanation['decision']:
+                debug_reason='cached decision differs from live fusion decision (stale batch run or different artifacts)'
+            else:
                 evidence=candidate['detectors']['lstm']['evidence']
                 matches=all((evidence[v].get('observed')==float(current[v])) or
                             (evidence[v].get('observed') is None and pd.isna(current[v]))
                             for v in ['temperature','pressure','humidity'])
-                if matches:explanation=candidate
-        except (OSError,ValueError,KeyError):
-            st.caption('Precomputed detail unavailable for this reading.')
+                if matches:
+                    explanation=candidate
+                else:
+                    debug_reason='cached row readings differ from displayed readings (stale batch run or wrong source parquet)'
+        except (OSError,ValueError,KeyError) as exc:
+            debug_reason=f'error reading cached detail: {exc}'
+    else:
+        debug_reason=f'no batch output at {path}'
+    if debug_reason:
+        st.caption(f'Precomputed detail unavailable for this reading: {debug_reason}')
     st.markdown('### Why was this alert raised?' if current['final_alert'] else '### Why is there no final alert?')
     for name,vote in explanation['decision']['detector_vote_summary'].items():
         st.write(f"{'✓ anomaly' if vote else '○ no anomaly vote'} — {name.title()}")
