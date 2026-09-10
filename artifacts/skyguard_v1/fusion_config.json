@@ -1,0 +1,31 @@
+{
+  "artifact_version": "skyguard_v1",
+  "created_at_utc": "2026-09-10T09:30:06.170071+00:00",
+  "calibration_source": "/home/aaryan/sih/skyguard/data/raw/ncr_weather_historical.parquet",
+  "calibration_period": {
+    "start": "2023-01-01T00:00:00+00:00",
+    "end": "2025-12-31T23:00:00+00:00"
+  },
+  "variables": [
+    "temperature",
+    "humidity",
+    "pressure"
+  ],
+  "stations": 12,
+  "rows": 315648,
+  "detectors": {
+    "statistical": "statistical.pkl",
+    "spatial": "spatial.pkl",
+    "lstm": "lstm.pkl"
+  },
+  "lstm_source": "/home/aaryan/sih/skyguard/results/lstm_autoencoder/calibration.pkl",
+  "fusion_policy": {
+    "name": "any_two_of_three",
+    "detectors": [
+      "statistical",
+      "spatial",
+      "lstm_ae"
+    ],
+    "minimum_votes": 2
+  }
+}
