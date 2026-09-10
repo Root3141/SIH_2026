@@ -1,6 +1,7 @@
 import streamlit as st
 
 from utils.styles import inject_css, COLOR_MAP, STATUS_ICON, STATUS_LABEL
+from utils.explainability import render_explanation
 
 # station_id -> station name, kept for reference / backend matching
 STATION_IDS = {
@@ -93,12 +94,7 @@ for col, sensor in zip([col1, col2, col3], ["Temperature", "Pressure", "Humidity
 
 st.markdown("---")
 
-if explanations:
-    st.markdown("### ⚠️ Alert Explanations")
-    for e in explanations:
-        st.warning(e)
-else:
-    st.success("All sensors within normal range.")
+render_explanation(current)
 
 st.markdown("### 📈 Live Sensor Trends")
 tabs = st.tabs(["Temperature", "Pressure", "Humidity"])
