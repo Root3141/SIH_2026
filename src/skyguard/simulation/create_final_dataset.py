@@ -143,6 +143,33 @@ def _add_evaluation_aliases(dataframe: pd.DataFrame) -> pd.DataFrame:
     return dataframe
 
 
+def _add_start_anomalies(
+    contaminated: pd.DataFrame,
+    events: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Ensure several deterministic anomalies appear in the first ten rows."""
+
+    first_ten = contaminated.head(10).copy()
+
+    for seed in range(4200, 4300):
+        candidate, start_events = inject_anomalies(
+            first_ten,
+            VARIABLES,
+            AnomalyConfig(anomaly_rate=0.5, random_seed=seed),
+        )
+        anomaly_mask = candidate["synthetic_anomaly"].fillna(False).astype(bool)
+
+        if anomaly_mask.iloc[1] and int(anomaly_mask.sum()) >= 3:
+            contaminated = pd.concat(
+                [candidate, contaminated.iloc[10:]],
+                ignore_index=True,
+            )
+            events = pd.concat([events, start_events], ignore_index=True)
+            return contaminated, events
+
+    raise RuntimeError("Could not create deterministic anomalies in the first ten rows.")
+
+
 def create_final_dataset(
     source_path: Path = PRESENT_PARQUET,
     output_dataset: Path = OUTPUT_DATASET,
@@ -162,6 +189,7 @@ def create_final_dataset(
         VARIABLES,
         config,
     )
+    contaminated, events = _add_start_anomalies(contaminated, events)
     contaminated, events = _stable_event_ids(contaminated, events)
     contaminated = _add_evaluation_aliases(contaminated)
     contaminated = contaminated.sort_values(["station_id", "timestamp"]).reset_index(
