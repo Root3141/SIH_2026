@@ -2,6 +2,23 @@ import streamlit as st
 
 from utils.styles import inject_css, COLOR_MAP, STATUS_ICON, STATUS_LABEL
 
+# station_id -> station name, kept for reference / backend matching
+STATION_IDS = {
+    "AWS_001": "Delhi Central",
+    "AWS_002": "Gurugram",
+    "AWS_003": "Noida",
+    "AWS_004": "Faridabad",
+    "AWS_005": "Ghaziabad",
+    "AWS_006": "Sonipat",
+    "AWS_007": "Rohtak",
+    "AWS_008": "Meerut",
+    "AWS_009": "Jhajjar",
+    "AWS_010": "Greater Noida",
+    "AWS_011": "Bahadurgarh",
+    "AWS_012": "Hapur",
+}
+
+
 st.set_page_config(page_title="Station Detail", page_icon="📡", layout="wide")
 inject_css()
 
@@ -49,7 +66,9 @@ explanations = [
 ]
 sensor_status = {sensor: (overall, f"Final status: {severity}") for sensor in readings}
 
-st.markdown(f"# 📡 {station}")
+station_name = STATION_IDS.get(station, station)
+
+st.markdown(f"# 📡 {station_name}")
 st.caption(
     f"Last reading: {current['timestamp'].strftime('%Y-%m-%d %H:%M')} (2026 stream, step {idx + 1}/{N_POINTS})"
 )
@@ -68,7 +87,7 @@ for col, sensor in zip([col1, col2, col3], ["Temperature", "Pressure", "Humidity
     s_status, s_msg = sensor_status[sensor]
     col.metric(sensor, f"{readings[sensor]:.1f}", help=s_msg)
     col.markdown(
-        f"<span style='color:{COLOR_MAP[s_status]};font-weight:600;'>{s_status.upper()}</span>",
+        f"<span style='color:{COLOR_MAP[s_status]};font-weight:600;'>{STATUS_LABEL[s_status].upper()}</span>",
         unsafe_allow_html=True,
     )
 

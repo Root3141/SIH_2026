@@ -4,7 +4,23 @@ import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
 from pathlib import Path
 
-from utils.styles import inject_css, COLOR_MAP, STATUS_ICON
+from utils.styles import inject_css, COLOR_MAP, STATUS_ICON, STATUS_LABEL
+
+# station_id -> station name, kept for reference / backend matching
+STATION_IDS = {
+    "AWS_001": "Delhi Central",
+    "AWS_002": "Gurugram",
+    "AWS_003": "Noida",
+    "AWS_004": "Faridabad",
+    "AWS_005": "Ghaziabad",
+    "AWS_006": "Sonipat",
+    "AWS_007": "Rohtak",
+    "AWS_008": "Meerut",
+    "AWS_009": "Jhajjar",
+    "AWS_010": "Greater Noida",
+    "AWS_011": "Bahadurgarh",
+    "AWS_012": "Hapur",
+}
 
 RESULTS_PATH = (
     Path(__file__).resolve().parents[2]
@@ -90,8 +106,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🗺️ Monitored Stations")
-    for p in STATIONS:
-        st.markdown(f"- {p}")
+    for station_id in STATIONS:
+        st.markdown(f"- {STATION_IDS.get(station_id, station_id)}")
 
 # ---------------- STREAM TICK ----------------
 if st.session_state.streaming:
@@ -136,11 +152,12 @@ for name, df in st.session_state.datasets.items():
     }
     if overall in ("yellow", "red"):
         last = st.session_state.alert_log[-1] if st.session_state.alert_log else None
-        if not last or not (last["Station"] == name and last["idx"] == idx):
+        if not last or not (last["StationId"] == name and last["idx"] == idx):
             st.session_state.alert_log.append(
                 {
-                    "Station": name,
-                    "Status": overall,
+                    "StationId": name,
+                    "Station": STATION_IDS.get(name, name),
+                    "Status": STATUS_LABEL[overall],
                     "idx": idx,
                     "Time": row["timestamp"].strftime("%Y-%m-%d %H:%M"),
                     "Details": "; ".join(explanations),
@@ -180,17 +197,22 @@ with tab1:
     map_df = pd.DataFrame(
         [
             {
-                "Station": name,
-                "lat": STATIONS[name][0],
-                "lon": STATIONS[name][1],
-                "Status": station_status[name]["overall"].capitalize(),
+                "StationId": station_id,
+                "Station": STATION_IDS.get(station_id, station_id),
+                "lat": STATIONS[station_id][0],
+                "lon": STATIONS[station_id][1],
+                "Status": station_status[station_id]["overall"].capitalize(),
                 "Temperature": round(
-                    station_status[name]["readings"]["Temperature"], 1
+                    station_status[station_id]["readings"]["Temperature"], 1
                 ),
-                "Pressure": round(station_status[name]["readings"]["Pressure"], 1),
-                "Humidity": round(station_status[name]["readings"]["Humidity"], 1),
+                "Pressure": round(
+                    station_status[station_id]["readings"]["Pressure"], 1
+                ),
+                "Humidity": round(
+                    station_status[station_id]["readings"]["Humidity"], 1
+                ),
             }
-            for name in STATIONS
+            for station_id in STATIONS
         ]
     )
 
@@ -231,7 +253,7 @@ with tab1:
     clicked_station = None
     if event and event.get("selection") and event["selection"].get("points"):
         point = event["selection"]["points"][0]
-        clicked_station = map_df.iloc[point["point_index"]]["Station"]
+        clicked_station = map_df.iloc[point["point_index"]]["StationId"]
 
     st.caption(
         "Click a marker on the map, or a card below, to open that station's live detail page."
@@ -239,17 +261,18 @@ with tab1:
 
     st.markdown("### Station Grid")
     cols = st.columns(4)
-    for i, name in enumerate(STATIONS):
-        status = station_status[name]["overall"]
+    for i, station_id in enumerate(STATIONS):
+        status = station_status[station_id]["overall"]
+        display_name = STATION_IDS.get(station_id, station_id)
         with cols[i % 4]:
             st.markdown(
                 f"""<div class="station-card" style="background-color:{COLOR_MAP[status]}22;
                 border:2px solid {COLOR_MAP[status]};">
-                {STATUS_ICON[status]} {name}</div>""",
+                {STATUS_ICON[status]} {display_name}</div>""",
                 unsafe_allow_html=True,
             )
-            if st.button("Open", key=f"open_{name}", use_container_width=True):
-                clicked_station = name
+            if st.button("Open", key=f"open_{station_id}", use_container_width=True):
+                clicked_station = station_id
 
     if clicked_station:
         st.session_state.selected_station = clicked_station
