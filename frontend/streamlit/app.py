@@ -201,16 +201,12 @@ with tab1:
                 "Station": STATION_IDS.get(station_id, station_id),
                 "lat": STATIONS[station_id][0],
                 "lon": STATIONS[station_id][1],
-                "Status": station_status[station_id]["overall"].capitalize(),
+                "Status": STATUS_LABEL[station_status[station_id]["overall"]],
                 "Temperature": round(
                     station_status[station_id]["readings"]["Temperature"], 1
                 ),
-                "Pressure": round(
-                    station_status[station_id]["readings"]["Pressure"], 1
-                ),
-                "Humidity": round(
-                    station_status[station_id]["readings"]["Humidity"], 1
-                ),
+                "Pressure": round(station_status[station_id]["readings"]["Pressure"], 1),
+                "Humidity": round(station_status[station_id]["readings"]["Humidity"], 1),
             }
             for station_id in STATIONS
         ]
@@ -222,7 +218,9 @@ with tab1:
         lat="lat",
         lon="lon",
         color="Status",
-        color_discrete_map={"Green": "#2ECC71", "Yellow": "#F1C40F", "Red": "#E74C3C"},
+        color_discrete_map={
+            STATUS_LABEL[color]: COLOR_MAP[color] for color in ("green", "yellow", "red")
+        },
         hover_name="Station",
         hover_data={
             "Temperature": True,
