@@ -1,40 +1,71 @@
+# ============================================================
+# SkyGuard AI — Git Ignore
+# ============================================================
+
+# ------------------------------------------------------------
 # Python
+# ------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
 *.pyd
+
 .pytest_cache/
 .coverage
 .coverage.*
 htmlcov/
 
+# ------------------------------------------------------------
 # Virtual environments
+# ------------------------------------------------------------
 .venv/
 venv/
 env/
 ENV/
 
+# ------------------------------------------------------------
 # Environment variables / secrets
+# ------------------------------------------------------------
 .env
 .env.*
 !.env.example
 
+# ------------------------------------------------------------
 # Build / packaging
+# ------------------------------------------------------------
 build/
 dist/
 *.egg-info/
 .eggs/
 
-# Data / ML artifacts
+# ------------------------------------------------------------
+# Development data
+# ------------------------------------------------------------
+# Raw datasets should generally stay out of Git.
 data/raw/*
 !data/raw/.gitkeep
+
+# Processed datasets
 data/processed/*
 !data/processed/.gitkeep
+
+# Synthetic/generated datasets
 data/synthetic/*
 !data/synthetic/.gitkeep
+
+# ------------------------------------------------------------
+# Evaluation results
+# ------------------------------------------------------------
+# Evaluation outputs are generated during development and
+# should not normally be committed.
 results/*
 !results/.gitkeep
+
+# ------------------------------------------------------------
+# ML artifacts
+# ------------------------------------------------------------
+# Model artifacts are ignored by default.
 artifacts/*
 !artifacts/.gitkeep
 
@@ -47,13 +78,54 @@ artifacts/*
 *.pt
 *.pth
 
-# Jupyter / IDE / editors
+# ------------------------------------------------------------
+# SkyGuard demo deployment assets
+# ------------------------------------------------------------
+# These are intentionally included because the deployed
+# Streamlit dashboard needs the frozen prototype results.
+
+!results/prototype/
+!results/prototype/skyguard_demo_2026_results.parquet
+
+# Runtime model/config artifacts required by the dashboard,
+# if the application imports them.
+!artifacts/skyguard_v1/
+!artifacts/skyguard_v1/*.pkl
+!artifacts/skyguard_v1/*.json
+
+# ------------------------------------------------------------
+# Jupyter
+# ------------------------------------------------------------
 .ipynb_checkpoints/
+
+# ------------------------------------------------------------
+# IDE / editors
+# ------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 
+# ------------------------------------------------------------
 # OS
+# ------------------------------------------------------------
 .DS_Store
 Thumbs.db
+
+# ------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------
+*.log
+
+# ------------------------------------------------------------
+# Temporary files
+# ------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*~
+
+# ------------------------------------------------------------
+# Streamlit
+# ------------------------------------------------------------
+.streamlit/secrets.toml
