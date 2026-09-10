@@ -715,6 +715,10 @@ The dashboard can then present the supporting detector evidence and available ex
 ### Live Sensor Trends
 
 ![SkyGuard AI Sensor Trends](assets/screenshots/Sensor_Trends.png)
+
+### Model Explainability and Operational Diagnosis
+
+![SkyGuard AI Model Explainability](assets/screenshots/Model_Explainability.png)
 ---
 
 ## Documentation
