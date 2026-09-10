@@ -11,6 +11,50 @@ Its purpose is simple:
 
 SkyGuard is a hackathon project, so this documentation prioritizes
 practical clarity and reproducibility over production-level process.
+The deployed prototype is available at:
+
+``` text
+https://skyguardai-sih.streamlit.app/
+```
+
+
+## Table of Contents
+
+1. [What is SkyGuard?](#1-what-is-skyguard)
+2. [Current System Architecture](#2-current-system-architecture)
+3. [Repository Branches and Development Workflow](#3-repository-branches-and-development-workflow)
+4. [Quick Start](#4-quick-start)
+5. [Project Structure](#5-project-structure)
+6. [Data Architecture](#6-data-architecture)
+7. [Synthetic Anomaly Injection](#7-synthetic-anomaly-injection)
+8. [Evaluation Philosophy](#8-evaluation-philosophy)
+9. [Observation-Level Metrics](#9-observation-level-metrics)
+10. [Event-Level Evaluation](#10-event-level-evaluation)
+11. [Window Overlap Contamination](#11-window-overlap-contamination)
+12. [Statistical Detector](#12-statistical-detector)
+13. [Spatial Detector](#13-spatial-detector)
+14. [LSTM Autoencoder Detector](#14-lstm-autoencoder-detector)
+15. [LSTM Calibration and Cached State](#15-lstm-calibration-and-cached-state)
+16. [LSTM Evaluator Modes](#16-lstm-evaluator-modes)
+17. [LSTM Thresholds](#17-lstm-thresholds)
+18. [LSTM Diagnostic Findings](#18-lstm-diagnostic-findings)
+19. [Why the LSTM Is Not Being Further Tuned Yet](#19-why-the-lstm-is-not-being-further-tuned-yet)
+20. [Combined Three-Detector Evaluation](#20-combined-three-detector-evaluation)
+21. [Fusion Baselines](#21-fusion-baselines)
+22. [LSTM Complementarity](#22-lstm-complementarity)
+23. [Current Detector Status](#23-current-detector-status)
+24. [Results Directories](#24-results-directories)
+25. [Detector Output Conventions](#25-detector-output-conventions)
+26. [Adding a New Detector](#26-adding-a-new-detector)
+27. [Fusion Development](#27-fusion-development)
+28. [Fusion Evaluation Rules](#28-fusion-evaluation-rules)
+29. [Recommended Development Order](#29-recommended-development-order)
+30. [Important Experimental Rules](#30-important-experimental-rules)
+31. [Reproducibility Checklist](#31-reproducibility-checklist)
+32. [Current Architecture Summary](#32-current-architecture-summary)
+33. [Current Development Status](#33-current-development-status)
+34. [Final Prototype Files and Runtime Integration](#34-final-prototype-files-and-runtime-integration)
+35. [Explainability and Operator Guidance](#35-explainability-and-operator-guidance)
 
 ------------------------------------------------------------------------
 
@@ -40,7 +84,8 @@ Different anomaly types have different signatures:
     modelling.
 
 The architecture therefore combines multiple independent sources of
-evidence.
+evidence. The prototype also exposes this evidence to operators so that an
+alert can be investigated without changing the underlying detector logic.
 
 ------------------------------------------------------------------------
 
@@ -314,7 +359,6 @@ The LSTM detector uses PyTorch when available.
 The important repository structure is approximately:
 
 ``` text
-SIH_2026/
 SIH_2026/
 │
 ├── README.md
@@ -780,7 +824,8 @@ results/statistical/
 ```
 
 The statistical detector is generally strong for obvious rule-based and
-temporal deviations.
+temporal deviations. Its explanation should point to the checks that actually
+triggered, such as range, rate-of-change, z-score, or persistence evidence.
 
 ------------------------------------------------------------------------
 
@@ -815,7 +860,8 @@ Large residual → possible anomaly
 ```
 
 The detector uses spatial relationships and Inverse Distance Weighting
-(IDW).
+(IDW). Useful explanation evidence is the expected value, signed residual,
+and number of retained neighbours.
 
 Current evaluated configuration includes:
 
@@ -895,7 +941,8 @@ Reconstruction Error
 ```
 
 Higher reconstruction error indicates greater deviation from learned
-normal behaviour.
+normal behaviour. This is useful evidence for an alert, but reconstruction
+error alone does not establish a physical sensor fault.
 
 ------------------------------------------------------------------------
 
@@ -1555,6 +1602,11 @@ my_detector_alert
 my_detector_severity
 ```
 
+When richer evidence is available, keep it tied to the detector's existing
+outputs. Useful fields include the observed value, expected value or
+baseline, residual/error, and the check that triggered. The explanation layer
+should not introduce a separate scoring rule.
+
 ------------------------------------------------------------------------
 
 ## Step 4: Create an evaluator
@@ -1652,7 +1704,10 @@ src/skyguard/fusion/
 ```
 
 Fusion should consume detector outputs rather than modifying detector
-internals.
+internals. Because the prototype uses a deterministic 2-of-3 rule, the final
+alert can be explained directly from the three detector votes and the required
+agreement. Model-attribution methods such as SHAP are not needed to explain
+the fusion decision itself.
 
 Conceptually:
 
@@ -2219,7 +2274,25 @@ Detector agreement
 Statistical detector result
 Spatial detector result
 LSTM detector result
+Explainability / supporting detector evidence (when available)
 ```
+
+A useful explanation flow is:
+
+``` text
+Final decision
+      ↓
+Detector agreement
+      ↓
+Detector evidence
+      ↓
+Optional model explanation
+      ↓
+Suggested checks / diagnosis
+```
+
+The explanation is presentation and investigation support. It must not alter
+the stored detector or fusion decision.
 
 Useful views are:
 
@@ -2279,8 +2352,6 @@ Last alert
 Dominant issue
 ```
 
-This is a prototype presentation feature, not a validated maintenance-
-prediction model unless separately evaluated.
 
 ## 34.7 Ground-truth boundary
 
@@ -2391,3 +2462,142 @@ anomaly detection.
 ✓ Ground truth is separate from runtime decisions
 ✓ Streamlit startup performs no training, calibration, injection, or inference
 ```
+
+------------------------------------------------------------------------
+
+# 35. Explainability and Operator Guidance
+
+Explainability is an operator-facing layer around the existing detector and
+fusion outputs. Its purpose is to make an alert easier to inspect without
+changing how SkyGuard decides that an alert exists.
+
+## 35.1 Final decision
+
+The first level of explanation is the existing fusion decision. Show the
+three detector votes, the required agreement, and the resulting alert and
+severity.
+
+``` text
+Statistical   ✓
+Spatial       ✓
+LSTM          ✗
+
+2 / 3 detectors agree
+FINAL ALERT
+```
+
+The agreement fraction is not a calibrated probability.
+
+------------------------------------------------------------------------
+
+## 35.2 Detector evidence
+
+Explanations should reuse evidence already produced by the detectors.
+
+``` text
+Statistical
+    Range / rate / z-score / persistence checks
+
+Spatial
+    Expected value / residual / neighbour support
+
+LSTM
+    Observed value / reconstruction / reconstruction error
+```
+
+This keeps explanations consistent with detector behaviour and avoids adding
+new rules solely for presentation. Humidity may be shown as spatial evidence,
+but it does not independently drive the current spatial alert.
+
+------------------------------------------------------------------------
+
+## 35.3 Optional LSTM model explanation
+
+The prototype may provide SHAP-based detail for the LSTM reconstruction
+score. It is optional and should be treated as a model diagnostic rather than
+as part of the alert decision.
+
+Keep the following distinctions clear:
+
+-   A SHAP contribution explains the reconstruction score, not the 2-of-3
+    fusion decision.
+-   Contribution magnitude is not a probability.
+-   Attribution is not proof of causality or a confirmed sensor failure.
+-   Correlated weather variables can share attribution.
+-   Retrospective temporal context can include observations after the timestamp
+    being reviewed.
+
+When SHAP is unavailable or cannot be computed reliably, the normal detector
+evidence should remain available rather than showing a guessed explanation.
+
+------------------------------------------------------------------------
+
+## 35.4 Operational diagnosis
+
+Diagnosis is a hypothesis layer for investigation. It may surface possible
+conditions such as:
+
+``` text
+DATA_DROPOUT
+STUCK_SENSOR
+NOISY_SENSOR
+SPIKE
+SENSOR_DRIFT
+SENSOR_OFFSET
+RATE_CHANGE
+UNCLASSIFIED_ANOMALY
+```
+
+These are operational hypotheses, not proof of physical failure. A confidence
+grade is an evidence grade, not a calibrated failure probability. When the
+historical reference required for shape-based rules is unavailable, the system
+should abstain rather than fit replacement thresholds from evaluation data.
+
+------------------------------------------------------------------------
+
+## 35.5 Evaluation and runtime boundary
+
+Explainability follows the same chronological boundary as the detector
+pipeline:
+
+``` text
+Historical 2023–2025
+        ↓
+Calibration / training
+        ↓
+Frozen detector state
+        ↓
+2026 evaluation data
+        ↓
+Frozen inference + fusion
+        ↓
+Explanation / evaluation
+```
+
+Synthetic labels remain for evaluation and explicitly labelled demo views.
+They must not be used to justify runtime detector votes.
+
+The Streamlit application should display prepared detector/fusion results and
+explanation data. It should not train models, recalibrate detectors, inject
+anomalies, or run inference just to render an explanation.
+
+------------------------------------------------------------------------
+
+## 35.6 Developer checklist
+
+When changing explainability code, verify:
+
+``` text
+✓ Detector votes are unchanged
+✓ Fusion remains deterministic 2-of-3
+✓ Explanations use existing detector evidence
+✓ No new detection thresholds are introduced
+✓ SHAP does not change the alert decision
+✓ Unavailable evidence remains explicit
+✓ Historical context respects the calibration boundary
+✓ Ground truth remains separate from runtime decisions
+✓ Streamlit presentation does not perform inference
+```
+
+The goal is to make existing alerts easier to understand without creating a
+second anomaly-detection system.
