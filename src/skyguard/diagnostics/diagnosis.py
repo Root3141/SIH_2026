@@ -34,12 +34,14 @@ class DiagnosisReference:
 
 
 def _inputs(df, reference):
-    required = ['station_id','timestamp','final_alert']+VARIABLES
+    # The current fusion contract has three core variables; surface pressure
+    # remains supported when actually observed, never fabricated as missing.
+    required = ['station_id','timestamp','final_alert']+VARIABLES[:3]
     if set(required)-set(df) or not df.columns.is_unique:
         raise ValueError('Missing required observation/final-alert columns or duplicate columns')
     if df.final_alert.isna().any() or df.final_alert.dtype != bool:
         raise ValueError('final_alert must be boolean')
-    allowed = required + [f'behavior_peer_{kind}_{v}' for v in VARIABLES for kind in ['expected','count']]
+    allowed = required + ['surface_pressure'] + [f'behavior_peer_{kind}_{v}' for v in VARIABLES for kind in ['expected','count']]
     data = df[[c for c in allowed if c in df]].copy().reset_index(drop=True)
     data.timestamp = pd.to_datetime(data.timestamp,utc=True,errors='raise')
     if data[['station_id','timestamp']].isna().any().any() or data.duplicated(['station_id','timestamp']).any():
@@ -100,7 +102,8 @@ def diagnose(df, reference):
     if set(OUTPUT_COLUMNS)&set(df):
         raise ValueError('Diagnostic output columns already exist')
     data=_inputs(df,reference)
-    features={v:_variable_features(data,v,reference) for v in VARIABLES}
+    variables=[v for v in VARIABLES if v in data]
+    features={v:_variable_features(data,v,reference) for v in variables}
     params=reference.parameters.set_index(['station_id','variable'])
     # Conservative network corroboration, independent of ground truth or votes.
     network={}
@@ -112,7 +115,7 @@ def diagnose(df, reference):
         diagnosis_evidence='{}') for _ in range(len(df))]
     for i in np.flatnonzero(data.final_alert):
         candidates=[]
-        for v in VARIABLES:
+        for v in variables:
             f=features[v].loc[i]; x=float(data[v].iloc[i]); station=data.station_id.iloc[i]
             kind=None; confidence=.0; reason=''
             if not np.isfinite(x):

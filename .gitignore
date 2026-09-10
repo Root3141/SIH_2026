@@ -35,6 +35,9 @@ data/synthetic/*
 !data/synthetic/.gitkeep
 results/*
 !results/.gitkeep
+!results/explainability/
+results/explainability/*
+!results/explainability/explainability_report.md
 artifacts/*
 !artifacts/.gitkeep
 

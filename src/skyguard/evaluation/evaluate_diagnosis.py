@@ -1,13 +1,18 @@
-"""Phase-1 evaluation conditional on frozen upstream detection; no model operations."""
-import hashlib
+"""Phase-1 diagnosis evaluation on current frozen 2-of-3 fusion output.
+
+Predictions precede all label joins. Missing historical references cause explicit
+abstention; no diagnosis normalizers, rules or thresholds are fitted here.
+"""
+import argparse
 import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support
-from skyguard.config.paths import RESULTS_DIR, CANONICAL_EVAL_INJECTED_PARQUET
-from skyguard.diagnostics.diagnosis import DiagnosisReference, diagnose, VARIABLES, PRECEDENCE, OUTPUT_COLUMNS
-from skyguard.evaluation.evaluate_complementarity import event_rows
+from skyguard.config.paths import RESULTS_DIR, PROJECT_ROOT
+from skyguard.diagnostics.diagnosis import DiagnosisReference, VARIABLES
+from skyguard.explainability.diagnosis_adapter import diagnose_fused
+from skyguard.fusion.fusion import run_fusion, ARTIFACTS_DIR
 
 OUTPUT=RESULTS_DIR/'diagnosis'
 LABELS=dict(dropout='DATA_DROPOUT',stuck='STUCK_SENSOR',drift='SENSOR_DRIFT',offset='SENSOR_OFFSET',
@@ -15,7 +20,6 @@ LABELS=dict(dropout='DATA_DROPOUT',stuck='STUCK_SENSOR',drift='SENSOR_DRIFT',off
 FAMILIES=dict(DATA_DROPOUT='DATA_AVAILABILITY',STUCK_SENSOR='FIXED_VALUE_FAILURE',
     SENSOR_DRIFT='BIAS_FAILURE',SENSOR_OFFSET='BIAS_FAILURE',NOISY_SENSOR='SIGNAL_INSTABILITY',
     RATE_CHANGE='SIGNAL_INSTABILITY',SPIKE='TRANSIENT_EXCURSION',UNCLASSIFIED_ANOMALY='UNCLASSIFIED_ANOMALY')
-
 
 def align(reference,other,check_labels=True):
     keys=['station_id','timestamp']
@@ -26,7 +30,7 @@ def align(reference,other,check_labels=True):
     idx=pd.MultiIndex.from_frame(left[keys]);right=right.set_index(keys)
     if set(idx)!=set(right.index):raise ValueError('Benchmark key mismatch')
     right=right.loc[idx].reset_index()
-    columns=VARIABLES+(['is_anomaly','anomaly_id','anomaly_type','anomaly_variable','anomaly_severity'] if check_labels else [])
+    columns=[v for v in VARIABLES if v in left]+(['is_anomaly','anomaly_id','anomaly_type','anomaly_variable','anomaly_severity'] if check_labels else [])
     for c in columns:
         a,b=left[c].reset_index(drop=True),right[c]
         if not (a.eq(b)|(a.isna()&b.isna())).all():raise ValueError('Benchmark mismatch: '+c)
@@ -36,147 +40,98 @@ def align(reference,other,check_labels=True):
 def classification(truth,pred,labels):
     p,r,f,s=precision_recall_fscore_support(truth,pred,labels=labels,zero_division=0)
     per=pd.DataFrame(dict(diagnosis=labels,precision=p,recall=r,f1=f,support=s))
-    summary=dict(rows=len(truth),accuracy=accuracy_score(truth,pred) if len(truth) else np.nan,
-        macro_f1=float(np.mean(f)),weighted_f1=float(np.dot(f,s)/s.sum()) if s.sum() else np.nan)
-    matrix=confusion_matrix(truth,pred,labels=labels+['UNCLASSIFIED_ANOMALY'])
+    summary=dict(rows=len(truth),accuracy=accuracy_score(truth,pred) if len(truth) else None,
+        macro_f1=float(np.mean(f)),weighted_f1=float(np.dot(f,s)/s.sum()) if s.sum() else None)
+    matrix=confusion_matrix(truth,pred,labels=labels+['UNCLASSIFIED_ANOMALY']) if len(truth) else np.zeros((len(labels)+1,len(labels)+1),dtype=int)
     return per,summary,pd.DataFrame(matrix,index=labels+['UNCLASSIFIED_ANOMALY'],columns=labels+['UNCLASSIFIED_ANOMALY'])
 
 
-def verify_protected():
-    before=json.loads((OUTPUT/'preservation_before.json').read_text())
-    after={p:hashlib.sha256((RESULTS_DIR.parent/p).read_bytes()).hexdigest() for p in before}
-    if before!=after:raise ValueError('Protected artifacts or source changed')
-    (OUTPUT/'preservation_after.json').write_text(json.dumps(after,indent=2))
-    return len(after)
+
+def load_reference(path=None, historical_end=None):
+    if path is None:
+        return None
+    if historical_end is None:
+        raise ValueError('--historical-end is required with --reference')
+    return DiagnosisReference(pd.read_csv(path), historical_end)
+
+
+def evaluate_predictions(predictions, truth_frame, output=OUTPUT):
+    """Only call after diagnosis; synthetic columns are joined here for scoring."""
+    output=Path(output);output.mkdir(parents=True,exist_ok=True)
+    keys=['station_id','timestamp']
+    labels=['is_anomaly','anomaly_type','anomaly_variable','anomaly_id']
+    if not set(labels[:3]).issubset(truth_frame):
+        return {'status':'synthetic_ground_truth_unavailable'}
+    truth=truth_frame[keys+[c for c in labels if c in truth_frame]].copy()
+    truth.timestamp=pd.to_datetime(truth.timestamp,utc=True)
+    result=predictions.merge(truth,on=keys,validate='one_to_one')
+    if len(result)!=len(predictions):raise ValueError('Evaluation row loss')
+    eligible=result.final_alert & result.is_anomaly
+    single=eligible & ~result.anomaly_type.fillna('').str.contains('|',regex=False)
+    target=result.loc[single,'anomaly_type'].map(LABELS)
+    if target.isna().any():raise ValueError('Unsupported benchmark phenotype')
+    pred=result.loc[single,'diagnosis']
+    per,summary,matrix=classification(target,pred,list(LABELS.values()))
+    summary.update(total_rows=len(result),upstream_alert_rows=int(result.final_alert.sum()),
+        detected_anomalous_rows=int(eligible.sum()),
+        upstream_missed_anomaly_rows=int((result.is_anomaly & ~result.final_alert).sum()),
+        upstream_false_positive_rows=int((result.final_alert & ~result.is_anomaly).sum()),
+        diagnosis_coverage=float(result.loc[eligible,'diagnosis'].ne('UNCLASSIFIED_ANOMALY').mean()) if eligible.any() else 0.,
+        overlapping_detected_rows=int((eligible & ~single).sum()),
+        joint_shape_variable_accuracy=float((pred.eq(target)&result.loc[single,'diagnosis_variable'].eq(result.loc[single,'anomaly_variable'])).mean()) if single.any() else None)
+    family_per,family_summary,family_matrix=classification(target.map(FAMILIES),pred.map(FAMILIES),list(dict.fromkeys(FAMILIES[x] for x in LABELS.values())))
+    per.to_csv(output/'diagnosis_by_class.csv',index=False)
+    matrix.to_csv(output/'diagnosis_confusion_matrix.csv')
+    family_per.to_csv(output/'diagnosis_family_by_class.csv',index=False)
+    family_matrix.to_csv(output/'diagnosis_family_confusion_matrix.csv')
+    # Preserve overlap-inclusive event membership analysis without the missing old module.
+    members=[]
+    if 'anomaly_id' in result:
+        for r in result.loc[result.is_anomaly].to_dict('records'):
+            ids=str(r['anomaly_id']).split('|'); kinds=str(r['anomaly_type']).split('|')
+            variables=str(r['anomaly_variable']).split('|')
+            if not (len(ids)==len(kinds)==len(variables)):
+                raise ValueError('Misaligned event membership labels')
+            for event,kind,variable in zip(ids,kinds,variables):
+                members.append(dict(anomaly_id=event,anomaly_type=kind,anomaly_variable=variable,
+                                    final_alert=r['final_alert'],diagnosis=r['diagnosis']))
+    if members:
+        expanded=pd.DataFrame(members); records=[]
+        for event,g in expanded.groupby('anomaly_id'):
+            detected=g[g.final_alert];counts=detected.diagnosis.value_counts()
+            dominant=sorted(counts[counts.eq(counts.max())].index)[0] if len(counts) else None
+            records.append(dict(anomaly_id=event,total_event_rows=len(g),detected_event_rows=len(detected),
+                dominant_diagnosis=dominant,conflicting_diagnoses=len(counts)>1,
+                dominant_percent_detected=100*counts.max()/len(detected) if len(detected) else None))
+        pd.DataFrame(records).to_csv(output/'diagnosis_event_consistency.csv',index=False)
+        detected=expanded[expanded.final_alert]
+        member_per,member_summary,_=classification(detected.anomaly_type.map(LABELS),detected.diagnosis,list(LABELS.values()))
+        member_per.to_csv(output/'diagnosis_membership_by_class.csv',index=False)
+        (output/'diagnosis_membership_metrics.json').write_text(json.dumps(member_summary,indent=2))
+    (output/'diagnosis_metrics.json').write_text(json.dumps(summary,indent=2))
+    (output/'diagnosis_family_metrics.json').write_text(json.dumps(family_summary,indent=2))
+    result.loc[result.final_alert & ~result.is_anomaly].groupby('diagnosis').size().to_csv(output/'upstream_false_positive_diagnoses.csv')
+    result.loc[result.final_alert].groupby('operational_class').size().to_csv(output/'operational_classes.csv')
+    return summary
 
 
 def main():
-    OUTPUT.mkdir(parents=True,exist_ok=True)
-    canonical=pd.read_parquet(CANONICAL_EVAL_INJECTED_PARQUET)
-    original=pd.read_parquet(RESULTS_DIR/'final_pipeline/final_predictions.parquet')
-    align(canonical,original,check_labels=False)
-    behavior=align(original,pd.read_parquet(RESULTS_DIR/'behavior_phase2/full_results.parquet'),check_labels=False)
-    data=original.copy()
-    for v in VARIABLES:
-        for kind in ['expected','count']:
-            c=f'behavior_peer_{kind}_{v}';data[c]=behavior[c].to_numpy()
-    metadata=json.loads((RESULTS_DIR/'behavior_phase2/calibration_metadata.json').read_text())
-    reference=DiagnosisReference(pd.read_csv(RESULTS_DIR/'behavior_phase2/threshold_metadata.csv'),metadata['historical_end'])
-    # Predictions are completed before ANY evaluation-label filtering or scoring.
-    result=diagnose(data,reference)
-    # Labels may now be validated for evaluation; they never governed prediction.
-    align(canonical,original)
-    align(original,behavior)
-    pd.testing.assert_frame_equal(result[original.columns],original,check_exact=True)
-    result.to_parquet(OUTPUT/'diagnosed_evaluation.parquet',index=False)
-    eligible=result.final_alert & result.is_anomaly
-    single=eligible & ~result.anomaly_type.fillna('').str.contains('|',regex=False)
-    truth=result.loc[single,'anomaly_type'].map(LABELS)
-    if truth.isna().any():raise ValueError('Unsupported benchmark phenotype')
-    pred=result.loc[single,'diagnosis']
-    per,summary,matrix=classification(truth,pred,list(LABELS.values()))
-    summary.update(total_rows=len(result),upstream_alert_rows=int(result.final_alert.sum()),
-        detected_anomalous_rows=int(eligible.sum()),upstream_missed_anomaly_rows=int((result.is_anomaly&~result.final_alert).sum()),
-        upstream_false_positive_rows=int((result.final_alert&~result.is_anomaly).sum()),
-        specific_diagnoses=int((eligible & result.diagnosis.ne('UNCLASSIFIED_ANOMALY')).sum()),
-        diagnosis_coverage=float(result.loc[eligible,'diagnosis'].ne('UNCLASSIFIED_ANOMALY').mean()),
-        overlapping_detected_rows=int((eligible&~single).sum()),
-        joint_shape_variable_accuracy=float((pred.eq(truth)&result.loc[single,'diagnosis_variable'].eq(result.loc[single,'anomaly_variable'])).mean()))
-    family_per,family_summary,family_matrix=classification(truth.map(FAMILIES),pred.map(FAMILIES),list(dict.fromkeys(FAMILIES[x] for x in LABELS.values())))
-    expanded=event_rows(result)
-    records=[]
-    for event,g in expanded.groupby('anomaly_id'):
-        detected=g[g.final_alert]
-        counts=detected.diagnosis.value_counts()
-        dominant=sorted(counts[counts.eq(counts.max())].index)[0] if len(counts) else None
-        records.append(dict(anomaly_id=event,anomaly_type=g.anomaly_type.iloc[0],anomaly_variable=g.anomaly_variable.iloc[0],
-            total_event_rows=len(g),detected_event_rows=len(detected),dominant_diagnosis=dominant,
-            dominant_percent_detected=100*counts.max()/len(detected) if len(detected) else np.nan,
-            dominant_percent_all_event_rows=100*counts.max()/len(g) if len(detected) else np.nan,
-            conflicting_diagnoses=len(counts)>1,distinct_diagnoses=len(counts)))
-    events=pd.DataFrame(records)
-    # Secondary overlap-inclusive membership analysis: each constituent event
-    # membership receives the same row diagnosis; no oracle chooses a label.
-    members=expanded[expanded.final_alert]
-    overlap_per,overlap_summary,_=classification(members.anomaly_type.map(LABELS),members.diagnosis,list(LABELS.values()))
-    tables=dict(diagnosis_metrics=pd.DataFrame([summary]),diagnosis_by_class=per,
-        diagnosis_family_metrics=pd.DataFrame([family_summary]),diagnosis_family_by_class=family_per,
-        diagnosis_event_consistency=events,diagnosis_membership_metrics=pd.DataFrame([overlap_summary]),
-        diagnosis_membership_by_class=overlap_per,
-        upstream_false_positive_diagnoses=result.loc[result.final_alert&~result.is_anomaly].groupby('diagnosis').size().reset_index(name='rows'),
-        operational_classes=result.loc[result.final_alert].groupby('operational_class').size().reset_index(name='rows'))
-    for name,table in tables.items():table.to_csv(OUTPUT/(name+'.csv'),index=False)
-    matrix.to_csv(OUTPUT/'diagnosis_confusion_matrix.csv',index_label='true_diagnosis')
-    family_matrix.to_csv(OUTPUT/'diagnosis_family_confusion_matrix.csv',index_label='true_family')
-    source=dict(reference_path=str(RESULTS_DIR/'behavior_phase2/threshold_metadata.csv'),metadata=metadata,
-        rule_origin='Fixed engineering rules, declared before evaluation; no label-based tuning',precedence=PRECEDENCE)
-    (OUTPUT/'reference_metadata.json').write_text(json.dumps(source,indent=2))
-    protected=verify_protected()
-    report=['# Sensor Health & Anomaly Diagnosis — Phase 1',
-        'Post-detection, retrospective batch diagnosis. No new detector, model training, alert modifications or fusion integration.',
-        '## Evaluation contract',
-        'Eligibility is the existing frozen production final_alert. All rows (including unalerted context) are preserved; '
-        'nonalerts have null diagnosis. Predictions are made from an explicit allowlist before reading evaluation labels. '
-        'Primary class metrics use singly labeled detected anomalous rows; overlapping rows are explicitly excluded from that '
-        'confusion matrix and separately reported in overlap-inclusive event-membership metrics. '
-        'Unknown diagnoses count as errors/false negatives. Macro F1 averages seven true phenotype classes, excluding the abstention output class. '
-        'Joint shape-variable accuracy additionally requires the chosen variable to match truth. '
-        'Upstream false positives have no valid fault-shape truth; their diagnoses are reported separately. '
-        'This conditional diagnosis accuracy is not end-to-end detection recall and cannot credit missed anomalies.',
-        'Fault-family mapping: DATA_AVAILABILITY = dropout; FIXED_VALUE_FAILURE = stuck; '
-        'BIAS_FAILURE = drift + offset; SIGNAL_INSTABILITY = noise + rate_change; '
-        'TRANSIENT_EXCURSION = spike. These group availability loss, motion collapse, persistent bias, '
-        'unstable signal changes and isolated excursions respectively. Ramp-generating drift/rate-change '
-        'injections cross this operational naming boundary, so family accuracy is not a physical identifiability guarantee.',
-        '## Schema audit',
-        'Production final_alert is Statistical OR Spatial OR Missingness. Missingness checks four variables; numeric core uses '
-        'temperature/humidity/pressure and Spatial excludes humidity from its final vote. Statistical supplies hourly residuals, '
-        'ROC and rolling z-scores. Spatial supplies IDW expectations, signed residuals and neighbor counts. '
-        'Phase-2 behavior exposes matching IDW peer expectations and historical robust normalization; these are used instead of '
-        'mapping detector flags to fault labels. TCN/GRU forecast and residual outputs exist but are not required. LSTM outputs are absent.',
-        '## Fixed rules and precedence',
-        'Six trailing complete hourly observations are required for sustained shapes. Gaps and nonfinite evidence invalidate the window. '
-        'Order: DATA_DROPOUT (nonfinite raw value), STUCK_SENSOR (raw span <=0.05 native units and peer span >=0.2 and >=4 times raw span), '
-        'NOISY_SENSOR (MAD of standardized residual derivatives >=3 and reversal fraction >=0.6), '
-        'SPIKE (absolute normalized residual >=3, preceding two residuals and following residual <2), '
-        'SENSOR_DRIFT (same-sign fraction >=0.8, absolute median residual >=3, absolute median slope >0.25 normalized units/hour '
-        'and monotonic fraction >=0.8), SENSOR_OFFSET (same sustained bias, slope <=0.25 and residual MAD <=1), '
-        'RATE_CHANGE (absolute standardized derivative >= frozen historical rate threshold), then UNCLASSIFIED_ANOMALY. '
-        'Availability precedes numerical rules; motion collapse precedes bias; erratic movement precedes apparent bias; '
-        'confirmed transient recovery precedes sustained-bias attribution; derivative-only evidence is least specific. '
-        'Across variables, precedence wins, then absolute normalized residual, then fixed variable order. '
-        'Constants are engineering definitions, not benchmark estimates: 0.05 reuses repository motion resolution; six samples '
-        'require sustained evidence; 3/2 robust-scale separation distinguishes large and quiet residuals; 0.8 denotes near-consistent '
-        'sign, 0.6 frequent reversal, 0.25 slow-versus-stable change, and a 4:1 peer motion contrast avoids ordinary quiet weather. '
-        'These choices are provisional, not empirically calibrated class probabilities.',
-        '## Timing, confidence and operational class',
-        'Spike confirmation requires exactly one following hourly observation. It cannot be emitted at an excursion onset in a '
-        'causal live pipeline; boundary excursions abstain or receive another supported diagnosis. Other shapes use current/past data. '
-        'Confidence is a fixed evidence grade (0.95 missing, 0.85 stuck, 0.8 spike, 0.7 noise, 0.65 bias, 0.55 rate, 0 abstention), '
-        'not a probability. SENSOR_FAULT requires local absolute normalized residual >=3, >=2 spatial peers and >=2 other network '
-        'stations with residual <2. POSSIBLE_ENVIRONMENTAL_EVENT requires similar contemporaneous movement by >=2 other stations '
-        'and the peer reference, with a small local residual and raw motion >=3 historical rate scales; '
-        'otherwise UNCERTAIN. These are corroboration hypotheses, not causal proof. '
-        'No regional-event ground truth exists here, so operational class accuracy is not claimed.',
-        '## Calibration source','```json\n'+json.dumps(source,indent=2)+'\n```',
-        '## Results','```json\n'+json.dumps(summary,indent=2)+'\n```']
-    for name in ['diagnosis_by_class','diagnosis_family_metrics','diagnosis_family_by_class','diagnosis_membership_metrics','operational_classes']:
-        report.extend(['## '+name,'```text\n'+tables[name].to_string(index=False)+'\n```'])
-    report.extend(['## Event consistency',f'{int(events.detected_event_rows.gt(0).sum())}/{len(events)} events detected upstream; '
-        f'{int(events.conflicting_diagnoses.sum())} detected events have conflicting diagnoses (including abstention). '
-        'Dominance ties use lexical order. Both detected-observation and whole-event denominators are exported.',
-        '## Limitations','Single-benchmark exploratory evidence. Drift and injected rate-change are both additive ramps and can be '
-        'observationally indistinguishable. Offset vs drift is sensitive to weather variation, window length and onset. '
-        'Clipping can turn excursions into plateaus. Multi-variable rows are reduced to a single primary diagnosis. '
-        'Peer contamination, natural station differences and historical normalization shifts can mislead localization. '
-        'The 0.05 resolution is inherited but is not a verified hardware specification. No rules were tuned after evaluation.',
-        '## Preservation',f'All {protected} protected source/data/result files match their initial SHA-256 hashes. '
-        'Existing full-suite synthetic training fixtures are separate from this engine; no model is trained by diagnosis.',
-        '## Reproduce','PYTHONPATH=src .venv/bin/python -m skyguard.evaluation.evaluate_diagnosis'])
-    for filename,heading in [('verdict.md','Verdict'),('test_verification.txt','Tests')]:
-        if (OUTPUT/filename).exists():report.extend(['## '+heading,(OUTPUT/filename).read_text()])
-    (OUTPUT/'diagnosis_report.md').write_text('\n\n'.join(report)+'\n')
-    print(json.dumps(summary,indent=2));print(per.to_string(index=False));print(family_summary)
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input',type=Path,default=PROJECT_ROOT/'data/synthetic/skyguard_demo_2026.parquet')
+    parser.add_argument('--artifacts-dir',type=Path,default=ARTIFACTS_DIR)
+    parser.add_argument('--reference',type=Path)
+    parser.add_argument('--historical-end')
+    parser.add_argument('--output',type=Path,default=OUTPUT)
+    args=parser.parse_args()
+    raw=pd.read_parquet(args.input)
+    runtime=raw[['station_id','timestamp']+[v for v in VARIABLES if v in raw]].copy()
+    fused=run_fusion(runtime,args.artifacts_dir)
+    predictions=diagnose_fused(fused,load_reference(args.reference,args.historical_end))
+    pd.testing.assert_frame_equal(predictions[fused.columns],fused,check_exact=True)
+    args.output.mkdir(parents=True,exist_ok=True)
+    predictions.to_parquet(args.output/'diagnosed_evaluation.parquet',index=False)
+    print(json.dumps(evaluate_predictions(predictions,raw,args.output),indent=2))
+    print(predictions.diagnosis_reference_status.iloc[0])
 
 
 if __name__=='__main__':main()
