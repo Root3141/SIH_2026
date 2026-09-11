@@ -446,7 +446,6 @@ The evaluation framework also examines how the different detectors behave indivi
 ```text
 SKYGUARD/
 ├── README.md
-├── SUBMISSION_GUIDE.md
 ├── .gitignore
 ├── pyproject.toml
 ├── requirements.txt
@@ -530,8 +529,8 @@ SKYGUARD/
 Clone the repository and create a Python environment:
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
-cd <YOUR_PROJECT_FOLDER>
+git clone https://github.com/Root3141/SIH_2026.git
+cd SIH_2026
 
 python -m venv .venv
 source .venv/bin/activate
@@ -728,7 +727,6 @@ Additional technical documentation is available under `docs/`:
 * [`docs/architecture.md`](docs/architecture.md) — System architecture and data flow
 * [`docs/CODEBASE_REFERENCE.md`](docs/CODEBASE_REFERENCE.md) — Detector and codebase reference
 * [`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md) — Development, evaluation, and workflow guidance
-* [`SUBMISSION_GUIDE.md`](SUBMISSION_GUIDE.md) — SIH submission checklist
 
 ---
 
